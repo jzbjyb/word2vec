@@ -34,7 +34,7 @@ struct vocab_word {
   char *word, *code, codelen;
 };
 
-char train_file[MAX_STRING], output_file[MAX_STRING];
+char train_file[MAX_STRING], output_file[MAX_STRING], eval_sh[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
 int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
@@ -46,6 +46,7 @@ real *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
 
 int hs = 1, negative = 0;
+int report_period = 10;
 const int table_size = 1e8;
 int *table;
 
@@ -325,6 +326,26 @@ void SaveVocab() {
   fclose(fo);
 }
 
+void SaveVec() {
+  FILE *fo;
+  long a, b;
+  fo = fopen(output_file, "wb");
+  if (fo == NULL) {
+    fprintf(stderr, "Cannot open %s: permission denied\n", output_file);
+    exit(1);
+  }
+  fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
+  for (a = 0; a < vocab_size; a++) {
+    if (vocab[a].word != NULL) {
+      fprintf(fo, "%s ", vocab[a].word);
+    }
+    if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn0[a * layer1_size + b], sizeof(real), 1, fo);
+    else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
+    fprintf(fo, "\n");
+  }
+  fclose(fo);
+}
+
 void ReadVocab() {
   long long a, i = 0;
   char c;
@@ -393,7 +414,7 @@ void DestroyNet() {
 
 void *TrainModelThread(void *id) {
   long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
-  long long word_count = 0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
+  long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
   long long l1, l2, c, target, label;
   unsigned long long next_random = (long long)id;
   real f, g;
@@ -407,6 +428,12 @@ void *TrainModelThread(void *id) {
   }
   fseek(fi, file_size / (long long)num_threads * (long long)id, SEEK_SET);
   while (1) {
+    if (report_period > 0 && word_count - last_report_word_count > train_words / num_threads / report_period) {
+      last_report_word_count = word_count;
+      SaveVec();
+      printf("--- eval ---");
+      system(eval_sh);
+    }
     if (word_count - last_word_count > 10000) {
       word_count_actual += word_count - last_word_count;
       last_word_count = word_count;
@@ -712,6 +739,8 @@ int main(int argc, char **argv) {
   output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
+  if ((i = ArgPos((char *)"-report-period", argc, argv)) > 0) report_period = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-eval", argc, argv)) > 0) strcpy(eval_sh, argv[i + 1]);
   if ((i = ArgPos((char *)"-size", argc, argv)) > 0) layer1_size = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
