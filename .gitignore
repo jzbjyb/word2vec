@@ -4,3 +4,4 @@ src/word-analogy
 src/word2phrase
 src/word2vec
 vec
+data/text8*

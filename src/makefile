@@ -9,8 +9,8 @@ all: word2vec word2vec-prob word2phrase distance word-analogy compute-accuracy
 
 word2vec : word2vec.c
 	$(CC) word2vec.c -o ${BIN_DIR}/word2vec $(CFLAGS)
-word2vec-prob : word2vec-prob.c
-	$(CC) word2vec-prob.c -o ${BIN_DIR}/word2vec-prob $(CFLAGS)
+word2vec-prob : word2vec-prob.cpp
+	$(CC) word2vec-prob.cpp -o ${BIN_DIR}/word2vec-prob $(CFLAGS)
 word2phrase : word2phrase.c
 	$(CC) word2phrase.c -o ${BIN_DIR}/word2phrase $(CFLAGS)
 distance : distance.c

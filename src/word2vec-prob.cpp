@@ -26,7 +26,7 @@
 #define MAX_SENTENCE_LENGTH 1000
 #define MAX_CODE_LENGTH 40
 
-uint32_t *SEED = &(int){2017};
+//uint32_t *SEED = &(uint32_t){2017};
 uint32_t XORSHF_RAND_MAX = (1 << 32) - 1;
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
@@ -54,6 +54,13 @@ int hs = 1, negative = 0;
 int report_period = 10, num_epoch = 1;
 const int table_size = 1e8;
 int *table;
+
+inline double fast_exp(double x) {
+  x = 1.0 + x / 256.0;
+  x *= x; x *= x; x *= x; x *= x;
+  x *= x; x *= x; x *= x; x *= x;
+  return x;
+}
 
 inline float fast_log2 (float val) {
    int * const exp_ptr = reinterpret_cast <int *> (&val);
@@ -84,6 +91,7 @@ unsigned long xorshf96(void) { //period 2^96-1
   return z;
 }
 
+/*
 uint32_t xorshift32(uint32_t state[static 1])
 {
 	uint32_t x = state[0];
@@ -93,6 +101,7 @@ uint32_t xorshift32(uint32_t state[static 1])
 	state[0] = x;
 	return x;
 }
+*/
 
 int fastrand() {
   int g_seed = (214013*g_seed+2531011); 
@@ -467,8 +476,8 @@ real *Softmax(real *vec) {
   long long c1, c2;
   for (c1 = 0; c1 < cate_n; c1++) {
     prob_sum = 0;
-    for (c2 = 0; c2 < cate_k; c2++) {
-      real p = exp(vec[c1 * cate_k + c2]);
+    for (c2 = 0; c2 < cate_k; c2++) { 
+      real p = fast_exp(vec[c1 * cate_k + c2]);
       prob_sum += p;
       prob[c1 * cate_k + c2] = p;
     }
@@ -675,6 +684,7 @@ void *TrainModelThread(void *id) {
         }
         // Learn weights input -> hidden
         if (negative > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
+        //if (hs) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
         if (hs) {
           long long c1, c2, c3;
           real *prob_syn0 = Softmax(syn0 + l1);
