@@ -548,6 +548,8 @@ void *TrainModelThread(void *id) {
       alpha = starting_alpha * (1 - word_count_actual / (real)(train_words /** num_epoch*/ + 1));
       //if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
       if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3;
+      //if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3 * \
+      //  (1 - (word_count_actual - 0.7 * train_words) / (real)(train_words * num_epoch + 1 - 0.7 * train_words));
     }
     if (sentence_length == 0) {
       while (1) {
