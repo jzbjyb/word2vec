@@ -27,7 +27,7 @@ fi
 echo -----------------------------------------------------------------------------------------------------
 echo -- Training vectors...
 time $BIN_DIR/word2vec -train $TEXT_DATA -output $VECTOR_DATA -cbow 0 -size 100 -window 3 -negative 0 -hs 1 -sample 1e-3 \
--threads 1 -binary 1 -report-period 0 -eval ./eval.sh
+-threads 6 -binary 1 -report-period 0 -eval ./eval.sh
   
 #fi
 
