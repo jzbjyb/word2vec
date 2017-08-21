@@ -46,7 +46,7 @@ int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long cate_n = 1, cate_k = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
-real alpha = 0.025, starting_alpha, sample = 0, tau = 1;
+real alpha = 0.025, starting_alpha, sample = 0, tau = 1, all_prob = 0;
 real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
 clock_t start;
 
@@ -563,9 +563,9 @@ void *TrainModelThread(void *id) {
       }
       alpha = starting_alpha * (1 - word_count_actual / (real)(train_words /** num_epoch*/ + 1));
       //if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
-      if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3;
-      //if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3 * \
-      //  (1 - (word_count_actual - 0.7 * train_words) / (real)(train_words * num_epoch + 1 - 0.7 * train_words));
+      // if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3;
+      if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3 * \
+        (1 - (word_count_actual - 0.7 * train_words) / (real)(train_words * num_epoch + 1 - 0.7 * train_words));
     }
     if (sentence_length == 0) {
       while (1) {
@@ -670,6 +670,8 @@ void *TrainModelThread(void *id) {
             // Propagate hidden -> output
             //for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
             for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
+            if (vocab[word].code[d]) all_prob += fast_log(1 / (1 + fast_exp(f)));
+            else all_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
             if (f <= -MAX_EXP) continue;
             else if (f >= MAX_EXP) continue;
             else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
@@ -788,6 +790,8 @@ void TrainModel() {
     printf("\n--- epoch %ld ---\n", e);
     for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainModelThread, (void *)a);
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+    printf("probability: %lf\n", all_prob / train_words);
+    all_prob = 0;
   }  
   if (classes == 0) {
     // Save the word vectors
