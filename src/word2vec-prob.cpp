@@ -450,6 +450,7 @@ void InitNet() {
     if (syn1p == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
      syn1p[a * layer1_size + b] = 0;
+     //syn1p[a * layer1_size + b] = (rand() / (real)RAND_MAX - 0.5) / layer1_size;
   }
   if (negative>0) {
     a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(real));
@@ -495,16 +496,17 @@ void Softmax(real *vec1, real *vec2, real *prob) {
   }
 }
 
-void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, real *cate, long long *pos) {
+void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsigned int *rr, real *cate, long long *pos) {
   real maxi, gumbel, cur;
   long long c1, c2, argmaxi = -1;
   for (c1 = 0; c1 < cate_n; c1++) {
     maxi = -1e15;
     argmaxi = -1;
     for (c2 = 0; c2 < cate_k; c2++) {
-      gumbel = -fast_log(-fast_log((real)rand() / (real)RAND_MAX + 1e-15) + 1e-15);
+      gumbel = -fast_log(-fast_log((real)rand_r(rr) / (real)RAND_MAX + 1e-15) + 1e-15);
+      //gumbel = -fast_log(-fast_log((real)rand() / (real)RAND_MAX + 1e-15) + 1e-15);
       //*(next_random) = *(next_random) * (unsigned long long)25214903917 + 11;
-      //gumbel = -log(-log((real)(*(next_random) % RAND_MAX) / (real)RAND_MAX + 1e-15) + 1e-15);
+      //gumbel = -fast_log(-fast_log((real)(*(next_random) % RAND_MAX) / (real)RAND_MAX + 1e-15) + 1e-15);
       //gumbel = -log(-log((real)xorshift32(SEED) / (real)XORSHF_RAND_MAX + 1e-15) + 1e-15);
       //gumbel = -log(-log((real)fastrand() / (real)RAND_MAX + 1e-15) + 1e-15);
       //gumbel = -log(-log((real)rand_sse() / (real)RAND_MAX + 1e-15) + 1e-15);
@@ -515,6 +517,7 @@ void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, real
         maxi =  cur;
         argmaxi = c2;
       }
+      cate[c1 * cate_k + c2] = 0;
     }
     cate[c1 * cate_k + argmaxi] = 1;
     if (pos != NULL) pos[c1] = argmaxi;
@@ -526,6 +529,7 @@ void *TrainModelThread(void *id) {
   long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
   long long l1, l2, c, target, label;
   unsigned long long next_random = (long long)id;
+  unsigned int rr = *((int*)(&id));
   real f, g;
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
@@ -653,13 +657,13 @@ void *TrainModelThread(void *id) {
         last_word = sen[c];
         if (last_word == -1) continue;
         l1 = last_word * layer1_size;
-        for (c = 0; c < layer1_size; c++) neu1e[c] = 0;        
+        for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
         // HIERARCHICAL SOFTMAX
         if (hs) {
           // fake posterior (which is actually equal to prior)
-          //GumbelSoftmax(syn0 + l1, NULL, &next_random, gs_syn0, NULL);
+          //GumbelSoftmax(syn0 + l1, NULL, &next_random, &rr, gs_syn0, NULL);
           // real posterior
-          GumbelSoftmax(syn0 + l1, syn1p + l1, &next_random, gs_syn0, pos);
+          GumbelSoftmax(syn0 + l1, syn1p + l1, &next_random, &rr, gs_syn0, pos);
           for (d = 0; d < vocab[word].codelen; d++) {
             f = 0;
             l2 = vocab[word].point[d] * layer1_size;
@@ -863,6 +867,7 @@ int ArgPos(char *str, int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+  srand(2017);
   int i;
   if (argc == 1) {
     printf("WORD VECTOR estimation toolkit v 0.1b\n\n");

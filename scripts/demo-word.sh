@@ -11,7 +11,7 @@ VEC_DIR=../vec
 
 TEXT_DATA=$DATA_DIR/text8
 ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
-VECTOR_DATA=$VEC_DIR/text8_w2v_100.bin
+VECTOR_DATA=$VEC_DIR/test.bin
 
 pushd ${SRC_DIR} && make; popd
 
@@ -27,7 +27,7 @@ fi
 echo -----------------------------------------------------------------------------------------------------
 echo -- Training vectors...
 time $BIN_DIR/word2vec -train $TEXT_DATA -output $VECTOR_DATA -cbow 0 -size 100 -window 3 -negative 0 -hs 1 -sample 1e-3 \
--threads 6 -binary 1 -report-period 0 -eval ./eval.sh
+-threads 12 -binary 1 -report-period 0 -eval ./eval.sh
   
 #fi
 
