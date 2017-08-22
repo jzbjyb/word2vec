@@ -6,3 +6,4 @@ src/word2vec
 vec
 data/text8*
 *.out
+.vscode

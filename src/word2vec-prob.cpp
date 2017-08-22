@@ -670,8 +670,8 @@ void *TrainModelThread(void *id) {
             // Propagate hidden -> output
             //for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
             for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
-            if (vocab[word].code[d]) all_prob += fast_log(1 / (1 + fast_exp(f)));
-            else all_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
+            //if (vocab[word].code[d]) all_prob += fast_log(1 / (1 + fast_exp(f)));
+            //else all_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
             if (f <= -MAX_EXP) continue;
             else if (f >= MAX_EXP) continue;
             else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
@@ -719,13 +719,13 @@ void *TrainModelThread(void *id) {
               ag1 = ag2 = 0;
               for (c3 = 0; c3 < cate_k; c3++) {
                 c23 = c2 == c3 ? 1 : 0;
-                ag = neu1e[c1 * cate_k + c3];
+                ag = neu1e[c1 * cate_k + c3] / tau;
                 if (kl) ag -= fast_log(prob_syn1p[c1 * cate_k + c3] / prob_syn0[c1 * cate_k + c3]) + 1;
                 ag1 += ag * prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn1p[c1 * cate_k + c2]);
                 if (kl) ag2 += prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn0[c1 * cate_k + c2]);
               }
-              ag1 = alpha * ag1 / tau;
-              ag2 = alpha * ag2 / tau;
+              ag1 = alpha * ag1;
+              ag2 = alpha * ag2;
               syn0[l1 + c1 * cate_k + c2] += ag1 + ag2;
               syn1p[l1 + c1 * cate_k + c2] += ag1;
             }

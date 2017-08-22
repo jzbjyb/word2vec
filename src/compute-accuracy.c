@@ -32,12 +32,15 @@ int main(int argc, char **argv)
   float *M;
   char *vocab;
   int TCN, CCN = 0, TACN = 0, CACN = 0, SECN = 0, SYCN = 0, SEAC = 0, SYAC = 0, QID = 0, TQ = 0, TQS = 0;
+  int normalize = 1;
   if (argc < 2) {
     printf("Usage: ./compute-accuracy <FILE> <threshold>\nwhere FILE contains word projections, and threshold is used to reduce vocabulary of the model for fast approximate evaluation (0 = off, otherwise typical value is 30000)\n");
     return 0;
   }
   strcpy(file_name, argv[1]);
-  if (argc > 2) threshold = atoi(argv[2]);
+  if (argc > 2) normalize = atoi(argv[2]);
+  if (argc > 3) threshold = atoi(argv[3]);
+  printf(normalize ? "Normalize embedding\n" : "No normalization\n");
   f = fopen(file_name, "rb");
   if (f == NULL) {
     printf("Input file not found\n");
@@ -56,6 +59,7 @@ int main(int argc, char **argv)
     fscanf(f, "%s%c", &vocab[b * max_w], &ch);
     for (a = 0; a < max_w; a++) vocab[b * max_w + a] = toupper(vocab[b * max_w + a]);
     for (a = 0; a < size; a++) fread(&M[a + b * size], sizeof(float), 1, f);
+    if (normalize == 0) continue;
     len = 0;
     for (a = 0; a < size; a++) len += M[a + b * size] * M[a + b * size];
     len = sqrt(len);
