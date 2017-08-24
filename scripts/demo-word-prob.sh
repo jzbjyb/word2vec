@@ -12,8 +12,9 @@ VEC_DIR=../vec
 #TEXT_DATA=$DATA_DIR/text8
 TEXT_DATA=/home/v-zhjia2/exp/data/WestburyLab.wikicorp.201004.txt.clean
 ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
-VECTOR_DATA=$VEC_DIR/wiki_size10-10_epoch5_vi_nokl_thread12.bin
-PROB_VECTOR_DATA=$VEC_DIR/wiki_size10-10_epoch5_vi_nokl_thread12.prob.bin
+VECTOR_DATA=$VEC_DIR/wiki_size10-10_epoch5_realvi_kl.bin
+PROB_VECTOR_DATA=$VEC_DIR/wiki_size10-10_epoch5_realvi_kl.prob.bin
+CONTEXT_VECTOR_DATA=$VEC_DIR/wiki_size10-10_epoch5_realvi_kl.context.bin
 CATE_N=10
 CATE_K=10
 
@@ -28,8 +29,9 @@ if [ ! -e $TEXT_DATA ]; then
 fi
 echo -----------------------------------------------------------------------------------------------------
 echo -- Training vectors...
-time $BIN_DIR/word2vec-prob -train $TEXT_DATA -output $VECTOR_DATA -cbow 0 -cate-n $CATE_N -cate-k $CATE_K -tau 1 -window 5 \
--negative 0 -hs 1 -sample 1e-3 -threads 12 -binary 1 -report-period 0 -alpha 0.25 -eval ./eval-prob.sh -epoch 5 -kl 0
+time $BIN_DIR/word2vec-prob -train $TEXT_DATA -output $VECTOR_DATA -context-output $CONTEXT_VECTOR_DATA \
+-cbow 0 -cate-n $CATE_N -cate-k $CATE_K -tau 1 -window 5 -negative 0 -hs 1 -sample 1e-3 \
+-threads 12 -binary 1 -report-period 0 -alpha 0.25 -eval ./eval-prob.sh -epoch 5 -kl 1
 
 $BIN_DIR/format $VECTOR_DATA $PROB_VECTOR_DATA $CATE_N $CATE_K
 

@@ -38,7 +38,7 @@ struct vocab_word {
   char *word, *code, codelen;
 };
 
-char train_file[MAX_STRING], output_file[MAX_STRING], eval_sh[MAX_STRING];
+char train_file[MAX_STRING], output_file[MAX_STRING], context_output_file[MAX_STRING], eval_sh[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
 int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
@@ -51,7 +51,7 @@ real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
 clock_t start;
 
 int hs = 1, negative = 0;
-int report_period = 10, num_epoch = 1, kl = 1;
+int report_period = 10, num_epoch = 1, kl = 1, posterior = 1;
 const int table_size = 1e8;
 int *table;
 
@@ -387,6 +387,7 @@ void SaveVocab() {
 void SaveVec() {
   FILE *fo;
   long a, b;
+  // save word embedding
   fo = fopen(output_file, "wb");
   if (fo == NULL) {
     fprintf(stderr, "Cannot open %s: permission denied\n", output_file);
@@ -399,6 +400,22 @@ void SaveVec() {
     }
     if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn0[a * layer1_size + b], sizeof(real), 1, fo);
     else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
+    fprintf(fo, "\n");
+  }
+  fclose(fo);
+  // save context embedding
+  fo = fopen(context_output_file, "wb");
+  if (fo == NULL) {
+    fprintf(stderr, "Cannot open %s: permission denied\n", context_output_file);
+    exit(1);
+  }
+  fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
+  for (a = 0; a < vocab_size; a++) {
+    if (vocab[a].word != NULL) {
+      fprintf(fo, "%s ", vocab[a].word);
+    }
+    if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn1p[a * layer1_size + b], sizeof(real), 1, fo);
+    else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn1p[a * layer1_size + b]);
     fprintf(fo, "\n");
   }
   fclose(fo);
@@ -527,7 +544,7 @@ void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsi
 void *TrainModelThread(void *id) {
   long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
   long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
-  long long l1, l2, c, target, label;
+  long long l1, l11, l2, c, target, label;
   unsigned long long next_random = (long long)id;
   unsigned int rr = *((int*)(&id));
   real f, g;
@@ -657,13 +674,16 @@ void *TrainModelThread(void *id) {
         last_word = sen[c];
         if (last_word == -1) continue;
         l1 = last_word * layer1_size;
+        l11 = word * layer1_size;
         for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
         // HIERARCHICAL SOFTMAX
         if (hs) {
-          // fake posterior (which is actually equal to prior)
-          //GumbelSoftmax(syn0 + l1, NULL, &next_random, &rr, gs_syn0, NULL);
-          // real posterior
-          GumbelSoftmax(syn0 + l1, syn1p + l1, &next_random, &rr, gs_syn0, pos);
+          if (posterior)
+            // real posterior
+            GumbelSoftmax(syn0 + l1, syn1p + l11, &next_random, &rr, gs_syn0, pos);
+          else
+            // fake posterior (which is actually equal to prior)
+            GumbelSoftmax(syn0 + l1, NULL, &next_random, &rr, gs_syn0, pos);
           for (d = 0; d < vocab[word].codelen; d++) {
             f = 0;
             l2 = vocab[word].point[d] * layer1_size;
@@ -711,23 +731,24 @@ void *TrainModelThread(void *id) {
           long long c1, c2, c3;
           real ag, ag1, ag2, c23;
           // derivative of reconstruction error
-          //Softmax(syn0 + l1, NULL, prob_syn0);
-          Softmax(syn0 + l1, syn1p + l1, prob_syn1p);
-          if (kl) Softmax(syn0 + l1, NULL, prob_syn0);
+          if (posterior) {
+            Softmax(syn0 + l1, syn1p + l11, prob_syn1p);
+            if (kl) Softmax(syn0 + l1, NULL, prob_syn0);
+          } else Softmax(syn0 + l1, NULL, prob_syn1p);
           for (c1 = 0; c1 < cate_n; c1++)
             for (c2 = 0; c2 < cate_k; c2++) {
               ag1 = ag2 = 0;
               for (c3 = 0; c3 < cate_k; c3++) {
                 c23 = c2 == c3 ? 1 : 0;
                 ag = neu1e[c1 * cate_k + c3] / tau;
-                if (kl) ag -= fast_log(prob_syn1p[c1 * cate_k + c3] / prob_syn0[c1 * cate_k + c3]) + 1;
+                if (posterior && kl) ag -= fast_log(prob_syn1p[c1 * cate_k + c3] / prob_syn0[c1 * cate_k + c3]) + 1;
                 ag1 += ag * prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn1p[c1 * cate_k + c2]);
-                if (kl) ag2 += prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn0[c1 * cate_k + c2]);
+                if (posterior && kl) ag2 += prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn0[c1 * cate_k + c2]);
               }
               ag1 = alpha * ag1;
               ag2 = alpha * ag2;
               syn0[l1 + c1 * cate_k + c2] += ag1 + ag2;
-              syn1p[l1 + c1 * cate_k + c2] += ag1;
+              if (posterior) syn1p[l11 + c1 * cate_k + c2] += ag1;
             }
           // derivative for KL divergence
           /*
@@ -783,6 +804,7 @@ void TrainModel() {
   if (read_vocab_file[0] != 0) ReadVocab(); else LearnVocabFromTrainFile();
   if (save_vocab_file[0] != 0) SaveVocab();
   if (output_file[0] == 0) return;
+  if (context_output_file[0] == 0) return;
   InitNet();
   if (negative > 0) InitUnigramTable();
   start = clock();
@@ -915,6 +937,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   output_file[0] = 0;
+  context_output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
   //if ((i = ArgPos((char *)"-size", argc, argv)) > 0) layer1_size = atoi(argv[i + 1]);
@@ -925,6 +948,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-tau", argc, argv)) > 0) tau = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-eval", argc, argv)) > 0) strcpy(eval_sh, argv[i + 1]);
   if ((i = ArgPos((char *)"-kl", argc, argv)) > 0) kl = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-posterior", argc, argv)) > 0) posterior = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
@@ -933,6 +957,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-cbow", argc, argv)) > 0) cbow = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0) alpha = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
+  if ((i = ArgPos((char *)"-context-output", argc, argv)) > 0) strcpy(context_output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) sample = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-hs", argc, argv)) > 0) hs = atoi(argv[i + 1]);
