@@ -38,7 +38,7 @@ struct vocab_word {
   char *word, *code, codelen;
 };
 
-char train_file[MAX_STRING], output_file[MAX_STRING], context_output_file[MAX_STRING], eval_sh[MAX_STRING];
+char train_file[MAX_STRING], output_file[MAX_STRING], context_output_file[MAX_STRING], predict_output_file[MAX_STRING], eval_sh[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
 int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
@@ -46,12 +46,12 @@ int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long cate_n = 1, cate_k = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
-real alpha = 0.025, starting_alpha, sample = 0, tau = 1, all_prob = 0;
+real alpha = 0.025, starting_alpha, sample = 0, tau = 1, min_tau = 0.05, starting_tau, all_prob = 0;
 real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
 clock_t start;
 
 int hs = 1, negative = 0;
-int report_period = 10, num_epoch = 1, kl = 1, posterior = 1;
+int report_period = 10, num_epoch = 1, kl = 1, posterior = 1, freedom = 0;
 const int table_size = 1e8;
 int *table;
 
@@ -419,6 +419,25 @@ void SaveVec() {
     fprintf(fo, "\n");
   }
   fclose(fo);
+  // save predict (output) embedding
+  // TODO: hierarchy softmax is hard to store
+  if (predict_output_file[0] != 0) {
+    fo = fopen(predict_output_file, "wb");
+    if (fo == NULL) {
+      fprintf(stderr, "Cannot open %s: permission denied\n", predict_output_file);
+      exit(1);
+    }
+    fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
+    for (a = 0; a < vocab_size; a++) {
+      if (vocab[a].word != NULL) {
+        fprintf(fo, "%s ", vocab[a].word);
+      }
+      if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn1[a * layer1_size + b], sizeof(real), 1, fo);
+      else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn1[a * layer1_size + b]);
+      fprintf(fo, "\n");
+    }
+    fclose(fo);
+  }
 }
 
 void ReadVocab() {
@@ -500,7 +519,7 @@ void Softmax(real *vec1, real *vec2, real *prob) {
   real prob_sum, p;
   long long c1, c2;
   for (c1 = 0; c1 < cate_n; c1++) {
-    prob_sum = 0;
+    prob_sum = freedom;
     for (c2 = 0; c2 < cate_k; c2++) {
       if (vec2 == NULL) p = fast_exp(vec1[c1 * cate_k + c2]);
       else p = fast_exp(vec1[c1 * cate_k + c2] + vec2[c1 * cate_k + c2]);
@@ -536,7 +555,14 @@ void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsi
       }
       cate[c1 * cate_k + c2] = 0;
     }
-    cate[c1 * cate_k + argmaxi] = 1;
+    if (freedom) {
+      gumbel = -fast_log(-fast_log((real)rand_r(rr) / (real)RAND_MAX + 1e-15) + 1e-15);
+      if (gumbel > maxi) {
+        maxi = gumbel;
+        argmaxi = cate_k;
+      }
+    }
+    if (argmaxi < cate_k) cate[c1 * cate_k + argmaxi] = 1;
     if (pos != NULL) pos[c1] = argmaxi;
   }
 }
@@ -573,16 +599,20 @@ void *TrainModelThread(void *id) {
       last_word_count = word_count;
       if ((debug_mode > 1)) {
         now=clock();
-        printf("%cAlpha: %f  Progress: %.2f%%  Words/thread/sec: %.2fk  ", 13, alpha,
+        printf("%cAlpha: %f  Tau: %f  Progress: %.2f%%  Words/thread/sec: %.2fk  ", 13, alpha, tau,
          word_count_actual / (real)(train_words + 1) * 100,
          word_count_actual / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
         fflush(stdout);
       }
+      // adjust learning rate
       alpha = starting_alpha * (1 - word_count_actual / (real)(train_words /** num_epoch*/ + 1));
       //if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
       // if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3;
       if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3 * \
         (1 - (word_count_actual - 0.7 * train_words) / (real)(train_words * num_epoch + 1 - 0.7 * train_words));
+      // adjust Gumbel-Max temperature
+      //tau = starting_tau * (1 - word_count_actual / (real)(train_words * 5 + 1));
+      //if (tau < min_tau) tau = min_tau;
     }
     if (sentence_length == 0) {
       while (1) {
@@ -801,6 +831,7 @@ void TrainModel() {
   }
   printf("Starting training using file %s\n", train_file);
   starting_alpha = alpha;
+  starting_tau = tau;
   if (read_vocab_file[0] != 0) ReadVocab(); else LearnVocabFromTrainFile();
   if (save_vocab_file[0] != 0) SaveVocab();
   if (output_file[0] == 0) return;
@@ -814,7 +845,7 @@ void TrainModel() {
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
     printf("probability: %lf\n", all_prob / train_words);
     all_prob = 0;
-  }  
+  }
   if (classes == 0) {
     // Save the word vectors
     SaveVec();
@@ -938,6 +969,7 @@ int main(int argc, char **argv) {
   }
   output_file[0] = 0;
   context_output_file[0] = 0;
+  predict_output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
   //if ((i = ArgPos((char *)"-size", argc, argv)) > 0) layer1_size = atoi(argv[i + 1]);
@@ -949,6 +981,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-eval", argc, argv)) > 0) strcpy(eval_sh, argv[i + 1]);
   if ((i = ArgPos((char *)"-kl", argc, argv)) > 0) kl = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-posterior", argc, argv)) > 0) posterior = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-freedom", argc, argv)) > 0) freedom = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
@@ -958,6 +991,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-alpha", argc, argv)) > 0) alpha = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-context-output", argc, argv)) > 0) strcpy(context_output_file, argv[i + 1]);
+  if ((i = ArgPos((char *)"-predict_output", argc, argv)) > 0) strcpy(predict_output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) sample = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-hs", argc, argv)) > 0) hs = atoi(argv[i + 1]);
@@ -965,8 +999,9 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
-  layer1_size = cate_n * cate_k;
-  printf("%lld category variable with %lld value\n", cate_n, cate_k);
+  if (freedom) cate_k -= 1;
+  layer1_size  = cate_n * cate_k;
+  printf("%lld category variable with %lld value, freedom: %d\n", cate_n, cate_k, freedom);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
