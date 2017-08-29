@@ -3,7 +3,7 @@
 DATA_DIR=../data
 BIN_DIR=../bin
 SRC_DIR=../src
-VECTOR_DATA=../vec/wiki_w2v_100.bin
+VECTOR_DATA=../vec/text8_w2v_10.bin
 SIM_DATA=../../wordsim_eval/wordsim353_sim_rel/wordsim_similarity_goldstandard.txt
 #SIM_DATA=../../wordsim_eval/SCWS/ratings.txt
 

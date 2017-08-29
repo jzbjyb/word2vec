@@ -3,8 +3,8 @@
 DATA_DIR=../data
 BIN_DIR=../bin
 SRC_DIR=../src
-#VECTOR_DATA=../vec/wiki_size50-2_epoch5_novi.bin
-VECTOR_DATA=../vec/text8_size10-10_epoch5_novi.bin
+#VECTOR_DATA=../vec/wiki_size50-2_epoch5_novi_free.bin
+VECTOR_DATA=../vec/test2.bin
 CONTEXT_VECTOR_DATA=../vec/wiki_size10-10_epoch5_realvi_kl.context.bin
 SIM_DATA=../../wordsim_eval/wordsim353_sim_rel/wordsim_similarity_goldstandard.txt
 #SIM_DATA=../../wordsim_eval/SCWS/ratings.txt

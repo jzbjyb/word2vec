@@ -48,10 +48,12 @@ long long cate_n = 1, cate_k = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
 real alpha = 0.025, starting_alpha, sample = 0, tau = 1, min_tau = 0.05, starting_tau, all_prob = 0;
 real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
+real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *adam_v_syn1p, \
+     adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8;
 clock_t start;
 
 int hs = 1, negative = 0;
-int report_period = 10, num_epoch = 1, kl = 1, posterior = 1, freedom = 0;
+int report_period = 10, num_epoch = 1, kl = 0, ent = 0, posterior = 0, freedom = 0, adam = 0;
 const int table_size = 1e8;
 int *table;
 
@@ -487,6 +489,22 @@ void InitNet() {
     for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
      syn1p[a * layer1_size + b] = 0;
      //syn1p[a * layer1_size + b] = (rand() / (real)RAND_MAX - 0.5) / layer1_size;
+    if (adam) {
+      a = posix_memalign((void **)&adam_m_syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
+      a = posix_memalign((void **)&adam_v_syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
+      a = posix_memalign((void **)&adam_m_syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
+      a = posix_memalign((void **)&adam_v_syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
+      a = posix_memalign((void **)&adam_m_syn1p, 128, (long long)vocab_size * layer1_size * sizeof(real));
+      a = posix_memalign((void **)&adam_v_syn1p, 128, (long long)vocab_size * layer1_size * sizeof(real));
+      if (adam_m_syn0 == NULL || adam_v_syn0 == NULL || adam_m_syn1 == NULL || adam_v_syn1 == NULL || adam_m_syn1p == NULL || adam_v_syn1p == NULL) {
+        printf("Memory allocation failed\n"); exit(1);
+      }
+      for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++) {
+        adam_m_syn0[a * layer1_size + b] = adam_v_syn0[a * layer1_size + b] = 0;
+        adam_m_syn1[a * layer1_size + b] = adam_v_syn1[a * layer1_size + b] = 0;
+        adam_m_syn1p[a * layer1_size + b] = adam_v_syn1p[a * layer1_size + b] = 0;
+      }
+    }
   }
   if (negative>0) {
     a = posix_memalign((void **)&syn1neg, 128, (long long)vocab_size * layer1_size * sizeof(real));
@@ -513,6 +531,12 @@ void DestroyNet() {
   if (syn1neg != NULL) {
     free(syn1neg);
   }
+  if (adam_m_syn0 != NULL) free(adam_m_syn0);
+  if (adam_v_syn0 != NULL) free(adam_v_syn0);
+  if (adam_m_syn1 != NULL) free(adam_m_syn1);
+  if (adam_v_syn1 != NULL) free(adam_v_syn1);
+  if (adam_m_syn1p != NULL) free(adam_m_syn1p);
+  if (adam_v_syn1p != NULL) free(adam_v_syn1p);
 }
 
 void Softmax(real *vec1, real *vec2, real *prob) {
@@ -567,6 +591,12 @@ void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsi
   }
 }
 
+real AdamGrad(real *m, real *v, real grad) {
+  *m = adam_beta1 * *m + (1 - adam_beta1) * grad;
+  *v = adam_beta2 * *v + (1 - adam_beta2) * grad * grad;
+  return (alpha * *m / adam_beta1p) / (sqrt(*v / adam_beta2p) + adam_eps);
+}
+
 void *TrainModelThread(void *id) {
   long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
   long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
@@ -604,12 +634,19 @@ void *TrainModelThread(void *id) {
          word_count_actual / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
         fflush(stdout);
       }
+      // adjust adam parameter
+      if (adam) {
+        adam_beta1p = 1 - (1 - adam_beta1p) * adam_beta1;
+        adam_beta2p = 1 - (1 - adam_beta2p) * adam_beta2;
+      }
       // adjust learning rate
-      alpha = starting_alpha * (1 - word_count_actual / (real)(train_words /** num_epoch*/ + 1));
-      //if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
-      // if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3;
-      if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3 * \
-        (1 - (word_count_actual - 0.7 * train_words) / (real)(train_words * num_epoch + 1 - 0.7 * train_words));
+      if (!adam) {
+        alpha = starting_alpha * (1 - word_count_actual / (real)(train_words /** num_epoch*/ + 1));
+        //if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
+        // if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3;
+        if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3 * \
+          (1 - (word_count_actual - 0.7 * train_words) / (real)(train_words * num_epoch + 1 - 0.7 * train_words));
+      }
       // adjust Gumbel-Max temperature
       //tau = starting_tau * (1 - word_count_actual / (real)(train_words * 5 + 1));
       //if (tau < min_tau) tau = min_tau;
@@ -730,7 +767,12 @@ void *TrainModelThread(void *id) {
             // Propagate errors output -> hidden
             for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
             // Learn weights hidden -> output
-            for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * gs_syn0[c];
+            if (adam) {
+              for (c = 0; c < layer1_size; c++) adam_m_syn1[c + l2] = adam_beta1 * adam_m_syn1[c + l2] + (1 - adam_beta1) * g * gs_syn0[c];
+              for (c = 0; c < layer1_size; c++) adam_v_syn1[c + l2] = adam_beta1 * adam_v_syn1[c + l2] + (1 - adam_beta1) * g * g * gs_syn0[c] * gs_syn0[c];
+            }
+            if (adam) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * adam_m_syn1[c + l2] / adam_beta1p / (sqrt(adam_v_syn1[c + l2] / adam_beta2p) + adam_eps); //AdamGrad(adam_m_syn1 + c + l2, adam_v_syn1 + c + l2, g * gs_syn0[c]);
+            else for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * gs_syn0[c];
           }
         }
         // NEGATIVE SAMPLING
@@ -767,42 +809,26 @@ void *TrainModelThread(void *id) {
           } else Softmax(syn0 + l1, NULL, prob_syn1p);
           for (c1 = 0; c1 < cate_n; c1++)
             for (c2 = 0; c2 < cate_k; c2++) {
+              ag = neu1e[c1 * cate_k + c2] / tau;
+              if (posterior && kl) ag -= fast_log(prob_syn1p[c1 * cate_k + c2] / prob_syn0[c1 * cate_k + c2]) + 1;
+              if (!posterior && ent) ag -= (fast_log(prob_syn1p[c1 * cate_k + c2]) + 1) / vocab[last_word].cn;
+              neu1e[c1 * cate_k + c2] = ag;
+            }
+          for (c1 = 0; c1 < cate_n; c1++)
+            for (c2 = 0; c2 < cate_k; c2++) {
               ag1 = ag2 = 0;
               for (c3 = 0; c3 < cate_k; c3++) {
                 c23 = c2 == c3 ? 1 : 0;
-                ag = neu1e[c1 * cate_k + c3] / tau;
-                if (posterior && kl) ag -= fast_log(prob_syn1p[c1 * cate_k + c3] / prob_syn0[c1 * cate_k + c3]) + 1;
-                ag1 += ag * prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn1p[c1 * cate_k + c2]);
+                ag1 += neu1e[c1 * cate_k + c3] * prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn1p[c1 * cate_k + c2]);
                 if (posterior && kl) ag2 += prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn0[c1 * cate_k + c2]);
               }
-              ag1 = alpha * ag1;
-              ag2 = alpha * ag2;
-              syn0[l1 + c1 * cate_k + c2] += ag1 + ag2;
-              if (posterior) syn1p[l11 + c1 * cate_k + c2] += ag1;
-            }
-          // derivative for KL divergence
-          /*
-          for (c1 = 0; c1 < cate_n; c1++)
-            for (c2 = 0; c2 < cate_k; c2++) {
-              c23 = c2 == pos[c1] ? 1 : 0;
-              ag = alpha * (c23 - prob_syn1p[c1 * cate_k + c2]) / tau;
-              syn0[l1 + c1 * cate_k + c2] += alpha * (c23 - prob_syn0[c1 * cate_k + c2]) / tau - ag;
-              syn1p[l1 + c1 * cate_k + c2] -= ag;
-            }
-          */
-          /*
-          for (c1 = 0; c1 < cate_n; c1++)
-            for (c2 = 0; c2 < cate_k; c2++) {
-              ag1 = ag2 = 0;
-              for (c3 = 0; c3 < cate_k; c3++) {
-                c23 = c2 == c3 ? 1 : 0;
-                ag1 += (fast_log(prob_syn1p[c1 * cate_k + c3] / prob_syn0[c1 * cate_k + c3]) + 1) * prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn1p[c1 * cate_k + c2]);
-                ag2 -= prob_syn1p[c1 * cate_k + c3] / prob_syn0[c1 * cate_k + c3] * prob_syn0[c1 * cate_k + c3] * (c23 - prob_syn0[c1 * cate_k + c2]);
+              if (adam) syn0[l1 + c1 * cate_k + c2] += AdamGrad(adam_m_syn0 + l1 + c1 * cate_k + c2, adam_v_syn0 + l1 + c1 * cate_k + c2, ag1 + ag2);
+              else syn0[l1 + c1 * cate_k + c2] += alpha * (ag1 + ag2);
+              if (posterior) {
+                if (adam) syn1p[l11 + c1 * cate_k + c2] += AdamGrad(adam_m_syn1p + l1 + c1 * cate_k + c2, adam_v_syn1p + l1 + c1 * cate_k + c2, ag1);
+                else syn1p[l11 + c1 * cate_k + c2] += alpha * ag1;
               }
-              syn0[l1 + c1 * cate_k + c2] -= alpha * (ag1 + ag2) / tau;
-              syn1p[l1 + c1 * cate_k + c2] -= alpha * ag1 / tau;
             }
-          */          
         }
       }
     }
@@ -980,8 +1006,10 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-tau", argc, argv)) > 0) tau = atof(argv[i + 1]);
   if ((i = ArgPos((char *)"-eval", argc, argv)) > 0) strcpy(eval_sh, argv[i + 1]);
   if ((i = ArgPos((char *)"-kl", argc, argv)) > 0) kl = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-ent", argc, argv)) > 0) ent = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-posterior", argc, argv)) > 0) posterior = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-freedom", argc, argv)) > 0) freedom = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-adam", argc, argv)) > 0) adam = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
