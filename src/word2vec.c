@@ -37,7 +37,7 @@ struct vocab_word {
 char train_file[MAX_STRING], output_file[MAX_STRING], eval_sh[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
-int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
+int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1, num_epoch = 1;
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
@@ -592,7 +592,7 @@ void *TrainModelThread(void *id) {
 }
 
 void TrainModel() {
-  long a, b, c, d;
+  long a, b, c, d, e;
   FILE *fo;
   pthread_t *pt = (pthread_t *)malloc(num_threads * sizeof(pthread_t));
   if (pt == NULL) {
@@ -607,8 +607,11 @@ void TrainModel() {
   InitNet();
   if (negative > 0) InitUnigramTable();
   start = clock();
-  for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainModelThread, (void *)a);
-  for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+  for (e = 0; e < num_epoch; e++) {
+    printf("\n--- epoch %ld ---\n", e);
+    for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainModelThread, (void *)a);
+    for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+  }
   fo = fopen(output_file, "wb");
   if (fo == NULL) {
     fprintf(stderr, "Cannot open %s: permission denied\n", output_file);
@@ -757,6 +760,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-threads", argc, argv)) > 0) num_threads = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-min-count", argc, argv)) > 0) min_count = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-epoch", argc, argv)) > 0) num_epoch = atoi(argv[i + 1]);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));

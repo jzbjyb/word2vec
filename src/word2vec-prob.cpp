@@ -28,12 +28,14 @@
 
 //uint32_t *SEED = &(uint32_t){2017};
 uint32_t XORSHF_RAND_MAX = (1 << 32) - 1;
+const float count_power = 1;
 const int vocab_hash_size = 30000000;  // Maximum 30 * 0.7 = 21M words in the vocabulary
 
 typedef float real;                    // Precision of float numbers
 
 struct vocab_word {
   long long cn;
+  real cn_e;
   int *point;
   char *word, *code, codelen;
 };
@@ -49,11 +51,12 @@ long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
 real alpha = 0.025, starting_alpha, sample = 0, tau = 1, min_tau = 0.05, starting_tau, all_prob = 0;
 real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
 real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *adam_v_syn1p, \
-     adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8;
+     adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8, \
+     *all_grad;
 clock_t start;
 
 int hs = 1, negative = 0;
-int report_period = 10, num_epoch = 1, kl = 0, ent = 0, posterior = 0, freedom = 0, adam = 0;
+int report_period = 10, num_epoch = 1, kl = 0, ent = 0, rollback = 0, posterior = 0, freedom = 0, adam = 0;
 const int table_size = 1e8;
 int *table;
 
@@ -245,6 +248,7 @@ void SortVocab() {
       while (vocab_hash[hash] != -1) hash = (hash + 1) % vocab_hash_size;
       vocab_hash[hash] = a;
       train_words += vocab[a].cn;
+      vocab[a].cn_e = pow(vocab[a].cn, count_power);
     }
   }
   vocab = (struct vocab_word *)realloc(vocab, (vocab_size + 1) * sizeof(struct vocab_word));
@@ -389,6 +393,7 @@ void SaveVocab() {
 void SaveVec() {
   FILE *fo;
   long a, b;
+  real s;
   // save word embedding
   fo = fopen(output_file, "wb");
   if (fo == NULL) {
@@ -400,7 +405,10 @@ void SaveVec() {
     if (vocab[a].word != NULL) {
       fprintf(fo, "%s ", vocab[a].word);
     }
-    if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn0[a * layer1_size + b], sizeof(real), 1, fo);
+    if (binary) for (b = 0; b < layer1_size; b++) {
+      s = syn0[a * layer1_size + b] - all_grad[a * layer1_size + b];
+      fwrite(&s, sizeof(real), 1, fo);
+    }
     else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn0[a * layer1_size + b]);
     fprintf(fo, "\n");
   }
@@ -483,12 +491,16 @@ void InitNet() {
     a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
-     syn1[a * layer1_size + b] = 0;
+      syn1[a * layer1_size + b] = 0;
     a = posix_memalign((void **)&syn1p, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (syn1p == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
-     syn1p[a * layer1_size + b] = 0;
-     //syn1p[a * layer1_size + b] = (rand() / (real)RAND_MAX - 0.5) / layer1_size;
+      syn1p[a * layer1_size + b] = 0;
+      //syn1p[a * layer1_size + b] = (rand() / (real)RAND_MAX - 0.5) / layer1_size;
+    a = posix_memalign((void **)&all_grad, 128, (long long)vocab_size * layer1_size * sizeof(real));
+    if (all_grad == NULL) {printf("Memory allocation failed\n"); exit(1);}
+    for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
+      all_grad[a * layer1_size + b] = 0;
     if (adam) {
       a = posix_memalign((void **)&adam_m_syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
       a = posix_memalign((void **)&adam_v_syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
@@ -531,6 +543,7 @@ void DestroyNet() {
   if (syn1neg != NULL) {
     free(syn1neg);
   }
+  if (all_grad != NULL) free(all_grad);
   if (adam_m_syn0 != NULL) free(adam_m_syn0);
   if (adam_v_syn0 != NULL) free(adam_v_syn0);
   if (adam_m_syn1 != NULL) free(adam_m_syn1);
@@ -601,6 +614,8 @@ void *TrainModelThread(void *id) {
   long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
   long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
   long long l1, l11, l2, c, target, label;
+  long long c1, c2, c3;
+  real ag, ag1, ag2, c23;
   unsigned long long next_random = (long long)id;
   unsigned int rr = *((int*)(&id));
   real f, g;
@@ -756,7 +771,8 @@ void *TrainModelThread(void *id) {
             l2 = vocab[word].point[d] * layer1_size;
             // Propagate hidden -> output
             //for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
-            for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
+            //for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
+            for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) f += syn1[c1 * cate_k + pos[c1] + l2];
             //if (vocab[word].code[d]) all_prob += fast_log(1 / (1 + fast_exp(f)));
             //else all_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
             if (f <= -MAX_EXP) continue;
@@ -772,7 +788,8 @@ void *TrainModelThread(void *id) {
               for (c = 0; c < layer1_size; c++) adam_v_syn1[c + l2] = adam_beta1 * adam_v_syn1[c + l2] + (1 - adam_beta1) * g * g * gs_syn0[c] * gs_syn0[c];
             }
             if (adam) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * adam_m_syn1[c + l2] / adam_beta1p / (sqrt(adam_v_syn1[c + l2] / adam_beta2p) + adam_eps); //AdamGrad(adam_m_syn1 + c + l2, adam_v_syn1 + c + l2, g * gs_syn0[c]);
-            else for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * gs_syn0[c];
+            //else for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * gs_syn0[c];
+            else for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) syn1[c1 * cate_k + pos[c1] + l2] += alpha * g;
           }
         }
         // NEGATIVE SAMPLING
@@ -799,9 +816,7 @@ void *TrainModelThread(void *id) {
         // Learn weights input -> hidden
         if (negative > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
         //if (hs) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
-        if (hs) {
-          long long c1, c2, c3;
-          real ag, ag1, ag2, c23;
+        if (hs) {          
           // derivative of reconstruction error
           if (posterior) {
             Softmax(syn0 + l1, syn1p + l11, prob_syn1p);
@@ -811,7 +826,7 @@ void *TrainModelThread(void *id) {
             for (c2 = 0; c2 < cate_k; c2++) {
               ag = neu1e[c1 * cate_k + c2] / tau;
               if (posterior && kl) ag -= fast_log(prob_syn1p[c1 * cate_k + c2] / prob_syn0[c1 * cate_k + c2]) + 1;
-              if (!posterior && ent) ag -= (fast_log(prob_syn1p[c1 * cate_k + c2]) + 1) / vocab[last_word].cn;
+              if (!posterior && ent) ag -= (fast_log(prob_syn1p[c1 * cate_k + c2]) + 1) / vocab[last_word].cn_e;
               neu1e[c1 * cate_k + c2] = ag;
             }
           for (c1 = 0; c1 < cate_n; c1++)
@@ -823,6 +838,10 @@ void *TrainModelThread(void *id) {
                 if (posterior && kl) ag2 += prob_syn1p[c1 * cate_k + c3] * (c23 - prob_syn0[c1 * cate_k + c2]);
               }
               if (adam) syn0[l1 + c1 * cate_k + c2] += AdamGrad(adam_m_syn0 + l1 + c1 * cate_k + c2, adam_v_syn0 + l1 + c1 * cate_k + c2, ag1 + ag2);
+              else if (rollback) {
+                syn0[l1 + c1 * cate_k + c2] += 2 * alpha * (ag1 + ag2);
+                all_grad[l1 + c1 * cate_k + c2] += alpha * ag1;
+              }
               else syn0[l1 + c1 * cate_k + c2] += alpha * (ag1 + ag2);
               if (posterior) {
                 if (adam) syn1p[l11 + c1 * cate_k + c2] += AdamGrad(adam_m_syn1p + l1 + c1 * cate_k + c2, adam_v_syn1p + l1 + c1 * cate_k + c2, ag1);
@@ -1007,6 +1026,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-eval", argc, argv)) > 0) strcpy(eval_sh, argv[i + 1]);
   if ((i = ArgPos((char *)"-kl", argc, argv)) > 0) kl = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-ent", argc, argv)) > 0) ent = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-rollback", argc, argv)) > 0) rollback = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-posterior", argc, argv)) > 0) posterior = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-freedom", argc, argv)) > 0) freedom = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-adam", argc, argv)) > 0) adam = atoi(argv[i + 1]);
