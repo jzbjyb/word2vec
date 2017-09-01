@@ -7,8 +7,8 @@ CFLAGS = -lm -pthread -O2 -Wall -funroll-loops -Wno-unused-result
 
 all: word2vec word2vec-prob word2phrase distance word-analogy compute-accuracy format
 
-word2vec : word2vec.c
-	$(CC) word2vec.c -o ${BIN_DIR}/word2vec $(CFLAGS)
+word2vec : word2vec.cpp
+	$(CC) word2vec.cpp -o ${BIN_DIR}/word2vec $(CFLAGS)
 word2vec-prob : word2vec-prob.cpp
 	$(CC) word2vec-prob.cpp -o ${BIN_DIR}/word2vec-prob $(CFLAGS)
 word2phrase : word2phrase.c

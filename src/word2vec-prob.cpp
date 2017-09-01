@@ -47,8 +47,8 @@ int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long cate_n = 1, cate_k = 100;
-long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
-real alpha = 0.025, starting_alpha, sample = 0, tau = 1, min_tau = 0.05, starting_tau, all_prob = 0;
+long long train_words = 0, word_count_actual = 0, last_word_count_actual = 0, file_size = 0, classes = 0;
+real alpha = 0.025, starting_alpha, alpha_decay = 1.0 / 3.0, sample = 0, tau = 1, min_tau = 0.2, starting_tau, all_prob = 0;
 real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
 real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *adam_v_syn1p, \
      adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8, \
@@ -618,7 +618,7 @@ void *TrainModelThread(void *id) {
   real ag, ag1, ag2, c23;
   unsigned long long next_random = (long long)id;
   unsigned int rr = *((int*)(&id));
-  real f, g;
+  real f, g, this_prob = 0;
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e = (real *)calloc(layer1_size, sizeof(real));
@@ -662,6 +662,9 @@ void *TrainModelThread(void *id) {
         if (alpha < starting_alpha * 0.3) alpha = starting_alpha * 0.3 * \
           (1 - (word_count_actual - 0.7 * train_words) / (real)(train_words * num_epoch + 1 - 0.7 * train_words));
       }
+      //if (!adam) {
+      //  alpha = starting_alpha * (1 - alpha_decay) * (1 - (word_count_actual - last_word_count_actual) / (real)(train_words + 1)) + starting_alpha * alpha_decay;
+      //}
       // adjust Gumbel-Max temperature
       //tau = starting_tau * (1 - word_count_actual / (real)(train_words * 5 + 1));
       //if (tau < min_tau) tau = min_tau;
@@ -773,8 +776,8 @@ void *TrainModelThread(void *id) {
             //for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
             //for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
             for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) f += syn1[c1 * cate_k + pos[c1] + l2];
-            //if (vocab[word].code[d]) all_prob += fast_log(1 / (1 + fast_exp(f)));
-            //else all_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
+            if (vocab[word].code[d]) this_prob += fast_log(1 / (1 + fast_exp(f)));
+            else this_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
             if (f <= -MAX_EXP) continue;
             else if (f >= MAX_EXP) continue;
             else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
@@ -857,6 +860,7 @@ void *TrainModelThread(void *id) {
       continue;
     }
   }
+  all_prob += this_prob;
   fclose(fi);
   free(neu1);
   free(neu1e);
@@ -890,6 +894,8 @@ void TrainModel() {
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
     printf("probability: %lf\n", all_prob / train_words);
     all_prob = 0;
+    //last_word_count_actual += word_count_actual;
+    //starting_alpha *= alpha_decay;
   }
   if (classes == 0) {
     // Save the word vectors

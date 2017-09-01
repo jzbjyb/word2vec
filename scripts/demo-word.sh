@@ -12,7 +12,7 @@ VEC_DIR=../vec
 TEXT_DATA=$DATA_DIR/text8
 #TEXT_DATA=/home/v-zhjia2/exp/data/WestburyLab.wikicorp.201004.txt.clean
 ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
-VECTOR_DATA=$VEC_DIR/text8_w2v_500.bin
+VECTOR_DATA=$VEC_DIR/text8_w2v_10_epoch10.bin
 
 pushd ${SRC_DIR} && make; popd
 
@@ -27,8 +27,8 @@ if [ ! -e $TEXT_DATA ]; then
 fi
 echo -----------------------------------------------------------------------------------------------------
 echo -- Training vectors...
-time $BIN_DIR/word2vec -train $TEXT_DATA -output $VECTOR_DATA -cbow 0 -size 500 -window 3 -negative 0 -hs 1 -sample 1e-3 \
--threads 12 -binary 1 -report-period 0 -eval ./eval.sh -epoch 1
+time $BIN_DIR/word2vec -train $TEXT_DATA -output $VECTOR_DATA -cbow 0 -size 10 -window 3 -negative 0 -hs 1 -sample 1e-3 \
+-threads 12 -binary 1 -report-period 0 -eval ./eval.sh -epoch 10
   
 #fi
 

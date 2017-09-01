@@ -14,6 +14,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
 #include <math.h>
 #include <pthread.h>
@@ -41,7 +42,7 @@ int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads
 int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long train_words = 0, word_count_actual = 0, file_size = 0, classes = 0;
-real alpha = 0.025, starting_alpha, sample = 0;
+real alpha = 0.025, starting_alpha, sample = 0, all_prob = 0;
 real *syn0, *syn1, *syn1neg, *expTable;
 clock_t start;
 
@@ -49,6 +50,28 @@ int hs = 1, negative = 0;
 int report_period = 10;
 const int table_size = 1e8;
 int *table;
+
+inline double fast_exp(double x) {
+  x = 1.0 + x / 256.0;
+  x *= x; x *= x; x *= x; x *= x;
+  x *= x; x *= x; x *= x; x *= x;
+  return x;
+}
+
+inline float fast_log2 (float val) {
+   int * const exp_ptr = reinterpret_cast <int *> (&val);
+   int x = *exp_ptr;
+   const int log_2 = ((x >> 23) & 255) - 128;
+   x &= ~(255 << 23);
+   x += 127 << 23;
+   *exp_ptr = x;
+   val = ((-1.0f/3) * val + 2) * val - 2.0f/3;
+   return (val + log_2);
+} 
+
+inline float fast_log (const float &val) {
+   return (fast_log2 (val) * 0.69314718f);
+}
 
 void InitUnigramTable() {
   int a, i;
@@ -417,7 +440,7 @@ void *TrainModelThread(void *id) {
   long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
   long long l1, l2, c, target, label;
   unsigned long long next_random = (long long)id;
-  real f, g;
+  real f, g, this_prob = 0;
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e = (real *)calloc(layer1_size, sizeof(real));
@@ -444,7 +467,7 @@ void *TrainModelThread(void *id) {
          word_count_actual / ((real)(now - start + 1) / (real)CLOCKS_PER_SEC * 1000));
         fflush(stdout);
       }
-      alpha = starting_alpha * (1 - word_count_actual / (real)(train_words + 1));
+      alpha = starting_alpha * (1 - word_count_actual / (real)(train_words * num_epoch + 1));
       if (alpha < starting_alpha * 0.0001) alpha = starting_alpha * 0.0001;
     }
     if (sentence_length == 0) {
@@ -544,6 +567,8 @@ void *TrainModelThread(void *id) {
           l2 = vocab[word].point[d] * layer1_size;
           // Propagate hidden -> output
           for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
+          if (vocab[word].code[d]) this_prob += fast_log(1 / (1 + fast_exp(f)));
+          else this_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
           if (f <= -MAX_EXP) continue;
           else if (f >= MAX_EXP) continue;
           else f = expTable[(int)((f + MAX_EXP) * (EXP_TABLE_SIZE / MAX_EXP / 2))];
@@ -585,6 +610,7 @@ void *TrainModelThread(void *id) {
       continue;
     }
   }
+  all_prob += this_prob;
   fclose(fi);
   free(neu1);
   free(neu1e);
@@ -611,6 +637,8 @@ void TrainModel() {
     printf("\n--- epoch %ld ---\n", e);
     for (a = 0; a < num_threads; a++) pthread_create(&pt[a], NULL, TrainModelThread, (void *)a);
     for (a = 0; a < num_threads; a++) pthread_join(pt[a], NULL);
+    printf("probability: %lf\n", all_prob / train_words);
+    all_prob = 0;
   }
   fo = fopen(output_file, "wb");
   if (fo == NULL) {
