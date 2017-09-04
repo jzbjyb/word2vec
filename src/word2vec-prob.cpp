@@ -48,7 +48,7 @@ int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100;
 long long cate_n = 1, cate_k = 100;
 long long train_words = 0, word_count_actual = 0, last_word_count_actual = 0, file_size = 0, classes = 0;
-real alpha = 0.025, starting_alpha, alpha_decay = 1.0 / 3.0, sample = 0, tau = 1, min_tau = 0.2, starting_tau, all_prob = 0;
+real alpha = 0.025, starting_alpha, alpha_decay = 1.0 / 3.0, sample = 0, tau = 1, min_tau = 0.2, starting_tau, all_prob = 0, var_scale = 1;
 real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
 real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *adam_v_syn1p, \
      adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8, \
@@ -600,6 +600,7 @@ void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsi
       }
     }
     if (argmaxi < cate_k) cate[c1 * cate_k + argmaxi] = 1;
+    //else cate[c1 * cate_k] = -1;
     if (pos != NULL) pos[c1] = argmaxi;
   }
 }
@@ -776,6 +777,8 @@ void *TrainModelThread(void *id) {
             //for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
             //for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
             for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) f += syn1[c1 * cate_k + pos[c1] + l2];
+            f /= var_scale;
+            //if (next_random % 100 > 95) printf("the f is %lf\n", f);
             if (vocab[word].code[d]) this_prob += fast_log(1 / (1 + fast_exp(f)));
             else this_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
             if (f <= -MAX_EXP) continue;
@@ -819,7 +822,7 @@ void *TrainModelThread(void *id) {
         // Learn weights input -> hidden
         if (negative > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
         //if (hs) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
-        if (hs) {          
+        if (hs) {
           // derivative of reconstruction error
           if (posterior) {
             Softmax(syn0 + l1, syn1p + l11, prob_syn1p);
@@ -827,7 +830,7 @@ void *TrainModelThread(void *id) {
           } else Softmax(syn0 + l1, NULL, prob_syn1p);
           for (c1 = 0; c1 < cate_n; c1++)
             for (c2 = 0; c2 < cate_k; c2++) {
-              ag = neu1e[c1 * cate_k + c2] / tau;
+              ag = neu1e[c1 * cate_k + c2] / tau / var_scale;
               if (posterior && kl) ag -= fast_log(prob_syn1p[c1 * cate_k + c2] / prob_syn0[c1 * cate_k + c2]) + 1;
               if (!posterior && ent) ag -= (fast_log(prob_syn1p[c1 * cate_k + c2]) + 1) / vocab[last_word].cn_e;
               neu1e[c1 * cate_k + c2] = ag;
@@ -1055,6 +1058,8 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-classes", argc, argv)) > 0) classes = atoi(argv[i + 1]);
   if (freedom) cate_k -= 1;
   layer1_size  = cate_n * cate_k;
+  var_scale = cate_n / 10;
+  if (var_scale < 1) var_scale = 1; 
   printf("%lld category variable with %lld value, freedom: %d\n", cate_n, cate_k, freedom);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));

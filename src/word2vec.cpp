@@ -567,6 +567,7 @@ void *TrainModelThread(void *id) {
           l2 = vocab[word].point[d] * layer1_size;
           // Propagate hidden -> output
           for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
+          //if (next_random % 100 > 95) printf("the f is %lf\n", f);
           if (vocab[word].code[d]) this_prob += fast_log(1 / (1 + fast_exp(f)));
           else this_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
           if (f <= -MAX_EXP) continue;

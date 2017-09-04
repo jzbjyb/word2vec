@@ -20,7 +20,7 @@ int main(int argc, char **argv)
 {
   FILE *f;
   char file_name[max_size], output_file[max_size], ch;
-  long long words, size, full_size, a, b, c, d, cate_n, cate_k, freedom = 0;
+  long long words, size, full_size, a, b, c, d, cate_n, cate_k, freedom = 0, norm = 0;
   float *M, *P, prob;
   char *vocab;
 
@@ -28,7 +28,8 @@ int main(int argc, char **argv)
   strcpy(output_file, argv[2]);
   cate_n = atoi(argv[3]);
   cate_k = atoi(argv[4]);
-  if (argc > 5) freedom = atoi(argv[5]);
+  norm = atoi(argv[5]);
+  if (argc > 6) freedom = atoi(argv[6]);
 
   if (freedom) cate_k -= 1;
   f = fopen(file_name, "rb");
@@ -38,10 +39,11 @@ int main(int argc, char **argv)
   }
   fscanf(f, "%lld", &words);
   fscanf(f, "%lld", &size);
-  full_size = size + cate_n * freedom;
+  if (!norm) full_size = size + cate_n * freedom;
+  else full_size = cate_n;
   if (cate_n * cate_k != size) {
-      printf("Size not correct\n");
-      return -1;
+    printf("Size not correct\n");
+    return -1;
   }
   vocab = (char *)malloc(words * max_w * sizeof(char));
   M = (float *)malloc(words * size * sizeof(float));
@@ -54,10 +56,11 @@ int main(int argc, char **argv)
     printf("Cannot allocate memory: %lld MB\n", words * full_size * sizeof(float) / 1048576);
     return -1;
   }
-  for (b = 0; b < words; b++) {
-    fscanf(f, "%s%c", &vocab[b * max_w], &ch);
-    for (a = 0; a < size; a++) fread(&M[a + b * size], sizeof(float), 1, f);
-    for (c = 0; c < cate_n; c++) {
+  if (!norm) {
+    for (b = 0; b < words; b++) {
+      fscanf(f, "%s%c", &vocab[b * max_w], &ch);
+      for (a = 0; a < size; a++) fread(&M[a + b * size], sizeof(float), 1, f);
+      for (c = 0; c < cate_n; c++) {
         prob = freedom;
         for (d = 0; d < cate_k; d++) {
             P[b * full_size + c * (cate_k + freedom) + d] = fast_exp(M[b * size + c * cate_k + d]);
@@ -65,7 +68,24 @@ int main(int argc, char **argv)
         }
         for (d = 0; d < cate_k; d++) P[b * full_size + c * (cate_k + freedom) + d] /= prob;
         if (freedom) P[b * full_size + c * (cate_k + freedom) + cate_k] = 1 / prob;
+      }
     }
+  } else if (cate_k == 2) {
+    for (b = 0; b < words; b++) {
+      fscanf(f, "%s%c", &vocab[b * max_w], &ch);
+      for (a = 0; a < size; a++) fread(&M[a + b * size], sizeof(float), 1, f);
+      for (c = 0; c < cate_n; c++) {
+        if (norm == 1) P[b * full_size + c] = M[b * size + c * cate_k] - M[b * size + c * cate_k + 1];
+        else if (norm == 2) P[b * full_size + c] = M[b * size + c * cate_k];
+        else {
+          printf("Unsupported norm\n");
+          return -1;
+        }
+      }
+    }
+  } else {
+    printf("Unsupported format\n");
+    return -1;
   }
   fclose(f);
   FILE *fo;
