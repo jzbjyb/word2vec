@@ -57,7 +57,7 @@ real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *ada
 clock_t start;
 
 int hs = 1, negative = 0;
-int report_period = 10, num_epoch = 1, kl = 0, ent = 0, rollback = 0, posterior = 0, freedom = 0, adam = 0, pre_train = 0, binary_one = 0;
+int report_period = 10, num_epoch = 1, kl = 0, ent = 0, rollback = 0, posterior = 0, freedom = 0, adam = 0, pre_train = 0, binary_one = 0, hard_sigm = 0;
 const int table_size = 1e8;
 int *table;
 
@@ -65,6 +65,12 @@ inline double fast_exp(double x) {
   x = 1.0 + x / 256.0;
   x *= x; x *= x; x *= x; x *= x;
   x *= x; x *= x; x *= x; x *= x;
+  /*
+  // TODO: small x result in free bug
+  if (abs(x) < 1e-5) {
+    if(x >= 0) x = 1e-5;
+    else x = -1e-5;
+  } */
   return x;
 }
 
@@ -572,6 +578,32 @@ void DestroyNet() {
   if (adam_v_syn1p != NULL) free(adam_v_syn1p);
 }
 
+real Clip(real x) {
+  x = x < 1e-5 ? 1e-5 : x;
+  x = x > (real)(1 - 1e-5) ? (real)(1 - 1e-5) : x;
+  return x;
+}
+
+real HardSigm(real x) {
+  x = (x + 1) / 2;
+  return Clip(x);
+}
+
+real HardSigmGrad(real x) {
+  if ((x > 1e-5) && (x < (real)(1 - 1e-5))) return 0.5;
+  return 0;
+}
+
+void HardSigmProb(real *vec1, real *vec2, real *prob) {
+  long long c1;
+  real x;
+  for (c1 = 0; c1 < cate_n; c1++) {
+    x = vec1[c1] + (vec2 != NULL ? vec2[c1] : 0);
+    prob[c1 * r_cate_k] = HardSigm(x);
+    prob[c1 * r_cate_k + 1] = HardSigm(-x);
+  }
+}
+
 void Softmax(real *vec1, real *vec2, real *prob) {
   real prob_sum, p;
   long long c1, c2;
@@ -589,12 +621,31 @@ void Softmax(real *vec1, real *vec2, real *prob) {
   }
 }
 
-void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsigned int *rr, real *cate, long long *pos) {
-  real maxi, gumbel, cur;
+void HardSigmSample(real *vec1, real *vec2, unsigned long long *next_random, unsigned int *rr, 
+                    real *prob_app, real *cate, long long *pos) {
+  real unit, x;
+  bool act;
+  long long c1;
+  for (c1 = 0; c1 < cate_n; c1++) {
+    x = vec1[c1] + (vec2 != NULL ? vec2[c1] : 0);
+    unit = (real)rand_r(rr) / (real)RAND_MAX;
+    act = unit <= HardSigm(x);
+    if (act) cate[c1] = 1;
+    else if (binary_one) cate[c1] = -1;
+    else cate[c1] = 0;
+    if (pos != NULL) pos[c1] = act ? 0 : 1;
+    prob_app[c1] = Clip(0.5 / tau * (x - 2 * unit + 1) + 0.5);
+  }
+}
+
+void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsigned int *rr, 
+                   real *prob_app, real *cate, long long *pos) {
+  real maxi, gumbel, cur, prob_sum;
   long long c1, c2, argmaxi = -1;
   for (c1 = 0; c1 < cate_n; c1++) {
     maxi = -1e15;
     argmaxi = -1;
+    prob_sum = freedom;
     for (c2 = 0; c2 < cate_k; c2++) {
       gumbel = -fast_log(-fast_log((real)rand_r(rr) / (real)RAND_MAX + 1e-15) + 1e-15);
       //gumbel = -fast_log(-fast_log((real)rand() / (real)RAND_MAX + 1e-15) + 1e-15);
@@ -611,7 +662,10 @@ void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsi
         argmaxi = c2;
       }
       cate[c1 * cate_k + c2] = 0;
+      prob_app[c1 * cate_k + c2] = fast_exp(cur / tau);
+      prob_sum += prob_app[c1 * cate_k + c2];
     }
+    for (c2 = 0; c2 < cate_k; c2++) prob_app[c1 * cate_k + c2] /= prob_sum;
     if (freedom) {
       gumbel = -fast_log(-fast_log((real)rand_r(rr) / (real)RAND_MAX + 1e-15) + 1e-15);
       if (gumbel > maxi) {
@@ -636,15 +690,17 @@ void *TrainModelThread(void *id) {
   long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
   long long l1, l11, l2, c, target, label;
   long long c1, c2, c3;
-  real ag, ag1, ag2, c23;
+  real ag1, ag2;
   unsigned long long next_random = (long long)id;
   unsigned int rr = *((int*)(&id));
   real f, g, this_prob = 0;
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
-  real *neu1e = (real *)calloc(r_layer1_size, sizeof(real));
+  real *neu1e = (real *)calloc(layer1_size, sizeof(real));
+  real *neu1e_prob = (real *)calloc(r_layer1_size, sizeof(real));
   real *gs_syn0 = (real *)calloc(layer1_size, sizeof(real));
   long long *pos = (long long *)calloc(cate_n, sizeof(long long));
+  real *prob_syn1p_app = (real *)calloc(layer1_size, sizeof(real));
   real *prob_syn1p = (real *)calloc(r_layer1_size, sizeof(real));
   real *prob_syn0 = (real *)calloc(r_layer1_size, sizeof(real));
   FILE *fi = fopen(train_file, "rb");
@@ -714,7 +770,8 @@ void *TrainModelThread(void *id) {
     word = sen[sentence_position];
     if (word == -1) continue;
     for (c = 0; c < layer1_size; c++) neu1[c] = 0;
-    for (c = 0; c < r_layer1_size; c++) neu1e[c] = 0;
+    for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
+    for (c = 0; c < r_layer1_size; c++) neu1e_prob[c] = 0;
     next_random = next_random * (unsigned long long)25214903917 + 11;
     b = next_random % window;
     if (cbow) {  //train the cbow architecture
@@ -781,16 +838,20 @@ void *TrainModelThread(void *id) {
         if (last_word == -1) continue;
         l1 = last_word * layer1_size;
         l11 = word * layer1_size;
-        for (c = 0; c < r_layer1_size; c++) neu1e[c] = 0;
+        for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
+        for (c = 0; c < r_layer1_size; c++) neu1e_prob[c] = 0;
         // HIERARCHICAL SOFTMAX
         if (hs) {
           if (pre_train <= 0) {
-            if (posterior)
+            if (posterior) {
               // real posterior
-              GumbelSoftmax(syn0 + l1, syn1p + l11, &next_random, &rr, gs_syn0, pos);
-            else
+              if (hard_sigm) HardSigmSample(syn0 + l1, syn1p + l11, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
+              else GumbelSoftmax(syn0 + l1, syn1p + l11, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
+            } else {
               // fake posterior (which is actually equal to prior)
-              GumbelSoftmax(syn0 + l1, NULL, &next_random, &rr, gs_syn0, pos);
+              if (hard_sigm) HardSigmSample(syn0 + l1, NULL, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
+              else GumbelSoftmax(syn0 + l1, NULL, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
+            }
           }
           for (d = 0; d < vocab[word].codelen; d++) {
             f = 0;
@@ -811,8 +872,8 @@ void *TrainModelThread(void *id) {
             // 'g' is the gradient not multiplied by the learning rate
             g = 1 - vocab[word].code[d] - f;
             // Propagate errors output -> hidden
-            //for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
-            for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) neu1e[c1 * r_cate_k + c2] += g * syn1[c1 * cate_k + c2 + l2];
+            for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
+            //for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) neu1e[c1 * r_cate_k + c2] += g * syn1[c1 * cate_k + c2 + l2];
             // Learn weights hidden -> output
             if (pre_train > 0) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * syn0[c + l1];
             else {
@@ -849,37 +910,42 @@ void *TrainModelThread(void *id) {
         }
         // Learn weights input -> hidden
         if (negative > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
-        //if (hs && pre_train > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += alpha * neu1e[c];
-        if (hs && pre_train > 0) for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) syn0[c1 * cate_k + c2 + l1] += alpha * neu1e[c1 * r_cate_k + c2];
+        if (hs && pre_train > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += alpha * neu1e[c];
+        //if (hs && pre_train > 0) for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) syn0[c1 * cate_k + c2 + l1] += alpha * neu1e[c1 * r_cate_k + c2];
         if (hs && pre_train <= 0) {
-          // derivative of reconstruction error
-          if (posterior) {
-            Softmax(syn0 + l1, syn1p + l11, prob_syn1p);
-            if (kl) Softmax(syn0 + l1, NULL, prob_syn0);
-          } else Softmax(syn0 + l1, NULL, prob_syn1p);
-          for (c1 = 0; c1 < cate_n; c1++)
-            for (c2 = 0; c2 < r_cate_k; c2++) {
-              ag = (binary_one + 1) * neu1e[c1 * r_cate_k + c2] / tau / var_scale;
-              if (posterior && kl) ag -= fast_log(prob_syn1p[c1 * r_cate_k + c2] / prob_syn0[c1 * r_cate_k + c2]) + 1;
-              if (!posterior && ent) ag -= (fast_log(prob_syn1p[c1 * r_cate_k + c2]) + 1) / vocab[last_word].cn_e;
-              neu1e[c1 * r_cate_k + c2] = ag;
+          // derivative of reconstruction error and KL divergence
+          if (posterior && kl) {
+            if (hard_sigm) {
+              HardSigmProb(syn0 + l1, syn1p + l11, prob_syn1p);
+              HardSigmProb(syn0 + l1, NULL, prob_syn0);
+            } else {
+              Softmax(syn0 + l1, syn1p + l11, prob_syn1p);
+              Softmax(syn0 + l1, NULL, prob_syn0);
             }
+          } else if (!posterior && ent) {
+            if (hard_sigm) HardSigmProb(syn0 + l1, NULL, prob_syn1p);
+            else Softmax(syn0 + l1, NULL, prob_syn1p);
+          }
+          for (c1 = 0; c1 < cate_n; c1++) {
+            for (c2 = 0; c2 < cate_k; c2++) neu1e[c1 * cate_k + c2] = (binary_one + 1) * neu1e[c1 * cate_k + c2] / tau / var_scale;
+            if (posterior && kl) for (c2 = 0; c2 < r_cate_k; c2++) neu1e_prob[c1 * r_cate_k + c2] = -fast_log(prob_syn1p[c1 * r_cate_k + c2] / prob_syn0[c1 * r_cate_k + c2]) + 1;
+            if (!posterior && ent) for (c2 = 0; c2 < r_cate_k; c2++) neu1e_prob[c1 * r_cate_k + c2] = -(fast_log(prob_syn1p[c1 * r_cate_k + c2]) + 1) / vocab[last_word].cn_e;
+          }
           for (c1 = 0; c1 < cate_n; c1++)
             for (c2 = 0; c2 < cate_k; c2++) {
               ag1 = ag2 = 0;
-              for (c3 = 0; c3 < r_cate_k; c3++) {
-                c23 = c2 == c3 ? 1 : 0;
-                ag1 += neu1e[c1 * r_cate_k + c3] * prob_syn1p[c1 * r_cate_k + c3] * (c23 - prob_syn1p[c1 * r_cate_k + c2]);
-                if (posterior && kl) ag2 += prob_syn1p[c1 * r_cate_k + c3] * (c23 - prob_syn0[c1 * r_cate_k + c2]);
+              if (hard_sigm) {
+                ag1 += neu1e[c1] * HardSigmGrad(prob_syn1p_app[c1]);
+                if ((posterior && kl) || (!posterior && ent)) ag1 += (neu1e_prob[c1 * r_cate_k] - neu1e_prob[c1 * r_cate_k + 1]) * HardSigmGrad(prob_syn1p[c1 * r_cate_k]);
+                //if (posterior && kl) ag2 += (prob_syn1p[c1 * r_cate_k] / prob_syn0[c1 * r_cate_k] - prob_syn1p[c1 * r_cate_k + 1] / prob_syn0[c1 * r_cate_k + 1]) * HardSigmGrad(prob_syn0[c1 * r_cate_k]);
+              } else {
+                for (c3 = 0; c3 < cate_k; c3++) 
+                  ag1 += neu1e[c1 * cate_k + c3] * prob_syn1p_app[c1 * cate_k + c3] * ((c2 == c3 ? 1 : 0) - prob_syn1p_app[c1 * cate_k + c2]);
+                if ((posterior && kl) || (!posterior && ent)) for (c3 = 0; c3 < r_cate_k; c3++)
+                  ag1 += neu1e_prob[c1 * r_cate_k + c3] * prob_syn1p[c1 * r_cate_k + c3] * ((c2 == c3 ? 1 : 0) - prob_syn1p[c1 * r_cate_k + c2]);
+                if (posterior && kl) for (c3 = 0; c3 < r_cate_k; c3++) 
+                  ag2 += prob_syn1p[c1 * r_cate_k + c3] * ((c2 == c3 ? 1 : 0) - prob_syn0[c1 * r_cate_k + c2]);
               }
-              /*
-              if (freedom) {
-                if (posterior && kl) ag1 -= (fast_log(prob_syn1p[c1 * r_cate_k + cate_k] / prob_syn0[c1 * r_cate_k + cate_k]) + 1) * \
-                                            prob_syn1p[c1 * r_cate_k + cate_k] * (-prob_syn1p[c1 * r_cate_k + c2]);
-                if (!posterior && ent) ag1 -= (fast_log(prob_syn1p[c1 * r_cate_k + cate_k]) + 1) / vocab[last_word].cn_e * \
-                                              prob_syn1p[c1 * r_cate_k + cate_k] * (-prob_syn1p[c1 * r_cate_k + c2]);
-                if (posterior && kl) ag2 += prob_syn1p[c1 * r_cate_k + cate_k] * (-prob_syn0[c1 * r_cate_k + c2]);
-              }*/
               if (adam) syn0[l1 + c1 * cate_k + c2] += AdamGrad(adam_m_syn0 + l1 + c1 * cate_k + c2, adam_v_syn0 + l1 + c1 * cate_k + c2, ag1 + ag2);
               else if (rollback) {
                 syn0[l1 + c1 * cate_k + c2] += 2 * alpha * (ag1 + ag2);
@@ -904,9 +970,11 @@ void *TrainModelThread(void *id) {
   fclose(fi);
   free(neu1);
   free(neu1e);
+  free(neu1e_prob);
   free(gs_syn0);
   free(pos);
   free(prob_syn1p);
+  free(prob_syn1p_app);
   free(prob_syn0);
   pthread_exit(NULL);
 }
@@ -1080,6 +1148,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-adam", argc, argv)) > 0) adam = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-pre", argc, argv)) > 0) pre_train = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-binary-one", argc, argv)) > 0) binary_one = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-hard-sigm", argc, argv)) > 0) hard_sigm = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
@@ -1105,7 +1174,9 @@ int main(int argc, char **argv) {
   var_scale = cate_n / 10;
   if (var_scale < 1) var_scale = 1;
   binary_one = cate_k == 1 && freedom && binary_one;
+  hard_sigm = cate_k == 1 && freedom && hard_sigm; // only use in binary case
   printf("%lld category variable with %lld value, freedom: %d\n", cate_n, cate_k, freedom);
+  printf("binary one: %d, hard sigm: %d\n", binary_one, hard_sigm);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
