@@ -15,6 +15,7 @@ parser.add_argument("-nor", "--normalized", help="normalize the vector", action=
 parser.add_argument("-el", "--expected_likelihood", help="using expected likelihood to calculate similarity", action="store_true")
 parser.add_argument("-cate_n", "--cate_n", help="category variable num", type=int, default=0)
 parser.add_argument("-cate_k", "--cate_k", help="category variable size", type=int, default=0)
+parser.add_argument("-top", "--top", help="evaluate only top words", type=int, default=100000000)
 args = parser.parse_args()
 
 def parse_sim_line(line, delimiter='\t', case_insensitive=True, mode=0):
@@ -102,16 +103,17 @@ if __name__ == '__main__':
     print('-vec and -sim are needed')
     exit()
   mode = 1 if 'SCWS' in args.sim_file else 0
+  print('Evaluate %d' % args.top)
   print('Normalize vector' if args.normalized else "No normalization")
   print('Context similarity file' if mode else "No context similarity file")
   w2v_emb = KeyedVectors.load_word2vec_format(args.vector_file, binary=True)
   if args.context_vector_file:
     context_emb = KeyedVectors.load_word2vec_format(args.context_vector_file, binary=True)
-    r = evaluate_word_pairs(w2v_emb, args.sim_file, case_insensitive=False, dummy4unknown=False,
+    r = evaluate_word_pairs(w2v_emb, args.sim_file, case_insensitive=False, dummy4unknown=False, restrict_vocab=args.top,
                             normalized=args.normalized, el=args.expected_likelihood, cate_n=args.cate_n, cate_k=args.cate_k, 
                             mode=mode, window=5, context_emb=context_emb)
   else:
-    r = evaluate_word_pairs(w2v_emb, args.sim_file, case_insensitive=False, dummy4unknown=False,
+    r = evaluate_word_pairs(w2v_emb, args.sim_file, case_insensitive=False, dummy4unknown=False, restrict_vocab=args.top,
                             normalized=args.normalized, el=args.expected_likelihood, cate_n=args.cate_n, cate_k=args.cate_k,
                             mode=mode)
   print(r)

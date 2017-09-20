@@ -46,18 +46,19 @@ char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
 int binary = 0, cbow = 0, debug_mode = 2, window = 5, min_count = 5, num_threads = 1, min_reduce = 1;
 int *vocab_hash;
-long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100, r_layer1_size;
+long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100, syn1_layer1_size, r_layer1_size;
 long long cate_n = 1, cate_k = 100, r_cate_k;
 long long train_words = 0, word_count_actual = 0, last_word_count_actual = 0, file_size = 0, classes = 0;
 real alpha = 0.025, starting_alpha, alpha_decay = 1.0 / 3.0, sample = 0, tau = 1, min_tau = 0.2, starting_tau, all_prob = 0, var_scale = 1;
-real *syn0, *syn1, *syn1p, *syn1neg, *expTable;
+real *syn0, *syn0eoe, *syn1, *syn1p, *syn1neg, *expTable;
 real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *adam_v_syn1p, \
      adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8, \
      *all_grad;
 clock_t start;
 
 int hs = 1, negative = 0;
-int report_period = 10, num_epoch = 1, kl = 0, ent = 0, rollback = 0, posterior = 0, freedom = 0, adam = 0, pre_train = 0, binary_one = 0, hard_sigm = 0;
+int report_period = 10, num_epoch = 1, kl = 0, ent = 0, rollback = 0, posterior = 0, freedom = 0, adam = 0, pre_train = 0, 
+    binary_one = 0, hard_sigm = 0, eoe = 0;
 const int table_size = 1e8;
 int *table;
 
@@ -444,13 +445,13 @@ void SaveVec() {
       fprintf(stderr, "Cannot open %s: permission denied\n", predict_output_file);
       exit(1);
     }
-    fprintf(fo, "%lld %lld\n", vocab_size, layer1_size);
+    fprintf(fo, "%lld %lld\n", vocab_size, syn1_layer1_size);
     for (a = 0; a < vocab_size; a++) {
       if (vocab[a].word != NULL) {
         fprintf(fo, "%s ", vocab[a].word);
       }
-      if (binary) for (b = 0; b < layer1_size; b++) fwrite(&syn1[a * layer1_size + b], sizeof(real), 1, fo);
-      else for (b = 0; b < layer1_size; b++) fprintf(fo, "%lf ", syn1[a * layer1_size + b]);
+      if (binary) for (b = 0; b < syn1_layer1_size; b++) fwrite(&syn1[a * syn1_layer1_size + b], sizeof(real), 1, fo);
+      else for (b = 0; b < syn1_layer1_size; b++) fprintf(fo, "%lf ", syn1[a * syn1_layer1_size + b]);
       fprintf(fo, "\n");
     }
     fclose(fo);
@@ -496,10 +497,10 @@ void InitNet() {
   a = posix_memalign((void **)&syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
   if (syn0 == NULL) {printf("Memory allocation failed\n"); exit(1);}
   if (hs) {
-    a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
+    a = posix_memalign((void **)&syn1, 128, (long long)vocab_size * syn1_layer1_size * sizeof(real));
     if (syn1 == NULL) {printf("Memory allocation failed\n"); exit(1);}
-    for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
-      syn1[a * layer1_size + b] = 0;
+    for (b = 0; b < syn1_layer1_size; b++) for (a = 0; a < vocab_size; a++)
+      syn1[a * syn1_layer1_size + b] = 0;
     a = posix_memalign((void **)&syn1p, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (syn1p == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
@@ -512,8 +513,8 @@ void InitNet() {
     if (adam) {
       a = posix_memalign((void **)&adam_m_syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
       a = posix_memalign((void **)&adam_v_syn0, 128, (long long)vocab_size * layer1_size * sizeof(real));
-      a = posix_memalign((void **)&adam_m_syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
-      a = posix_memalign((void **)&adam_v_syn1, 128, (long long)vocab_size * layer1_size * sizeof(real));
+      a = posix_memalign((void **)&adam_m_syn1, 128, (long long)vocab_size * syn1_layer1_size * sizeof(real));
+      a = posix_memalign((void **)&adam_v_syn1, 128, (long long)vocab_size * syn1_layer1_size * sizeof(real));
       a = posix_memalign((void **)&adam_m_syn1p, 128, (long long)vocab_size * layer1_size * sizeof(real));
       a = posix_memalign((void **)&adam_v_syn1p, 128, (long long)vocab_size * layer1_size * sizeof(real));
       if (adam_m_syn0 == NULL || adam_v_syn0 == NULL || adam_m_syn1 == NULL || adam_v_syn1 == NULL || adam_m_syn1p == NULL || adam_v_syn1p == NULL) {
@@ -521,9 +522,24 @@ void InitNet() {
       }
       for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++) {
         adam_m_syn0[a * layer1_size + b] = adam_v_syn0[a * layer1_size + b] = 0;
-        adam_m_syn1[a * layer1_size + b] = adam_v_syn1[a * layer1_size + b] = 0;
         adam_m_syn1p[a * layer1_size + b] = adam_v_syn1p[a * layer1_size + b] = 0;
       }
+      for (b = 0; b < syn1_layer1_size; b++) for (a = 0; a < vocab_size; a++)
+        adam_m_syn1[a * syn1_layer1_size + b] = adam_v_syn1[a * syn1_layer1_size + b] = 0;
+    }
+    if (eoe > 0) {
+      a = posix_memalign((void **)&syn0eoe, 128, (long long)layer1_size * eoe * sizeof(real));
+      if (syn0eoe == NULL) {printf("Memory allocation failed\n"); exit(1);}
+      if (eoe == 1) for (a = 0; a < cate_n; a++) for (b = 0; b < cate_k; b++) 
+        syn0eoe[a * cate_k + b] = -1.0 + 2.0 / (cate_k - 1) * b;
+      else for (b = 0; b < eoe; b++) for (a = 0; a < layer1_size; a++)
+        syn0eoe[a * eoe + b] = (rand() / (real)RAND_MAX - 0.5) / syn1_layer1_size;
+      //for (b = 0; b < eoe; b++) for (a = 0; a < layer1_size; a++)
+      //  syn0eoe[a * eoe + b] = 0;
+      //for (a = 0; a < cate_n; a++) for (b = 0; b < cate_k; b++) for(c = 0; c < eoe; c++) {
+      //  if (b == c) syn0eoe[a * cate_k * eoe + b * eoe + c] = 1;
+      //  else syn0eoe[a * cate_k * eoe + b * eoe + c] = 0;
+      //}
     }
   }
   if (negative>0) {
@@ -576,6 +592,7 @@ void DestroyNet() {
   if (adam_v_syn1 != NULL) free(adam_v_syn1);
   if (adam_m_syn1p != NULL) free(adam_m_syn1p);
   if (adam_v_syn1p != NULL) free(adam_v_syn1p);
+  if (syn0eoe != NULL) free(syn0eoe);
 }
 
 real Clip(real x) {
@@ -662,7 +679,7 @@ void GumbelSoftmax(real *vec1, real *vec2, unsigned long long *next_random, unsi
         argmaxi = c2;
       }
       cate[c1 * cate_k + c2] = 0;
-      prob_app[c1 * cate_k + c2] = fast_exp(cur / tau);
+      prob_app[c1 * cate_k + c2] = fast_exp((cur - gumbel) / tau);
       prob_sum += prob_app[c1 * cate_k + c2];
     }
     for (c2 = 0; c2 < cate_k; c2++) prob_app[c1 * cate_k + c2] /= prob_sum;
@@ -696,9 +713,11 @@ void *TrainModelThread(void *id) {
   real f, g, this_prob = 0;
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
-  real *neu1e = (real *)calloc(layer1_size, sizeof(real));
+  real *neu1e = (real *)calloc(syn1_layer1_size, sizeof(real));
+  real *neu1e_ae = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e_prob = (real *)calloc(r_layer1_size, sizeof(real));
   real *gs_syn0 = (real *)calloc(layer1_size, sizeof(real));
+  real *gs_syn0_eoe = (real *)calloc(syn1_layer1_size, sizeof(real));
   long long *pos = (long long *)calloc(cate_n, sizeof(long long));
   real *prob_syn1p_app = (real *)calloc(layer1_size, sizeof(real));
   real *prob_syn1p = (real *)calloc(r_layer1_size, sizeof(real));
@@ -770,8 +789,7 @@ void *TrainModelThread(void *id) {
     word = sen[sentence_position];
     if (word == -1) continue;
     for (c = 0; c < layer1_size; c++) neu1[c] = 0;
-    for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
-    for (c = 0; c < r_layer1_size; c++) neu1e_prob[c] = 0;
+    for (c = 0; c < syn1_layer1_size; c++) neu1e[c] = 0;
     next_random = next_random * (unsigned long long)25214903917 + 11;
     b = next_random % window;
     if (cbow) {  //train the cbow architecture
@@ -838,8 +856,7 @@ void *TrainModelThread(void *id) {
         if (last_word == -1) continue;
         l1 = last_word * layer1_size;
         l11 = word * layer1_size;
-        for (c = 0; c < layer1_size; c++) neu1e[c] = 0;
-        for (c = 0; c < r_layer1_size; c++) neu1e_prob[c] = 0;
+        for (c = 0; c < syn1_layer1_size; c++) neu1e[c] = 0;
         // HIERARCHICAL SOFTMAX
         if (hs) {
           if (pre_train <= 0) {
@@ -852,17 +869,33 @@ void *TrainModelThread(void *id) {
               if (hard_sigm) HardSigmSample(syn0 + l1, NULL, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
               else GumbelSoftmax(syn0 + l1, NULL, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
             }
+            if (eoe > 0) {
+              // embedding of embedding
+              if (binary_one) {
+                for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < eoe; c2++) 
+                  gs_syn0_eoe[c1 * eoe + c2] = syn0eoe[c1 * eoe + c2] * gs_syn0[c1];
+              }
+              else for (c1 = 0; c1 < cate_n; c1++) {
+                if (pos[c1] < cate_k) for (c2 = 0; c2 < eoe; c2++) 
+                  gs_syn0_eoe[c1 * eoe + c2] = syn0eoe[c1 * cate_k * eoe + pos[c1] * eoe + c2];
+                else for (c2 = 0; c2 < eoe; c2++) gs_syn0_eoe[c1 * eoe + c2] = 0;
+              }
+            }
           }
           for (d = 0; d < vocab[word].codelen; d++) {
             f = 0;
-            l2 = vocab[word].point[d] * layer1_size;
+            l2 = vocab[word].point[d] * syn1_layer1_size;
             // Propagate hidden -> output
             if (pre_train > 0) for (c = 0; c < layer1_size; c++) f += syn0[c + l1] * syn1[c + l2];
             else {
-              if (binary_one) for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
-              else for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) f += syn1[c1 * cate_k + pos[c1] + l2];
+              if (eoe > 0) {
+                for (c = 0; c < syn1_layer1_size; c++) f += gs_syn0_eoe[c] * syn1[c + l2];
+              } else {
+                if (binary_one) for (c = 0; c < layer1_size; c++) f += gs_syn0[c] * syn1[c + l2];
+                else for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) f += syn1[c1 * cate_k + pos[c1] + l2];
+                //if (next_random % 100 > 95) printf("the f is %lf\n", f);
+              }
               f /= var_scale;
-              //if (next_random % 100 > 95) printf("the f is %lf\n", f);
             }
             if (vocab[word].code[d]) this_prob += fast_log(1 / (1 + fast_exp(f)));
             else this_prob += fast_log(fast_exp(f) / (1 + fast_exp(f)));
@@ -872,18 +905,22 @@ void *TrainModelThread(void *id) {
             // 'g' is the gradient not multiplied by the learning rate
             g = 1 - vocab[word].code[d] - f;
             // Propagate errors output -> hidden
-            for (c = 0; c < layer1_size; c++) neu1e[c] += g * syn1[c + l2];
-            //for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) neu1e[c1 * r_cate_k + c2] += g * syn1[c1 * cate_k + c2 + l2];
+            for (c = 0; c < syn1_layer1_size; c++) neu1e[c] += g * syn1[c + l2];
             // Learn weights hidden -> output
             if (pre_train > 0) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * syn0[c + l1];
             else {
-              if (adam) {
-                for (c = 0; c < layer1_size; c++) adam_m_syn1[c + l2] = adam_beta1 * adam_m_syn1[c + l2] + (1 - adam_beta1) * g * gs_syn0[c] / var_scale;
-                for (c = 0; c < layer1_size; c++) adam_v_syn1[c + l2] = adam_beta1 * adam_v_syn1[c + l2] + (1 - adam_beta1) * g * g * gs_syn0[c] * gs_syn0[c] / var_scale / var_scale;
+              if (eoe) {
+                // TODO: no adam for eoe
+                for (c = 0; c < syn1_layer1_size; c++) syn1[c + l2] += alpha * g * gs_syn0_eoe[c] / var_scale;
+              } else {
+                if (adam) {
+                  for (c = 0; c < layer1_size; c++) adam_m_syn1[c + l2] = adam_beta1 * adam_m_syn1[c + l2] + (1 - adam_beta1) * g * gs_syn0[c] / var_scale;
+                  for (c = 0; c < layer1_size; c++) adam_v_syn1[c + l2] = adam_beta1 * adam_v_syn1[c + l2] + (1 - adam_beta1) * g * g * gs_syn0[c] * gs_syn0[c] / var_scale / var_scale;
+                }
+                if (adam) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * adam_m_syn1[c + l2] / adam_beta1p / (sqrt(adam_v_syn1[c + l2] / adam_beta2p) + adam_eps); //AdamGrad(adam_m_syn1 + c + l2, adam_v_syn1 + c + l2, g * gs_syn0[c]);
+                else if (binary_one) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * gs_syn0[c] / var_scale;
+                else for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) syn1[c1 * cate_k + pos[c1] + l2] += alpha * g / var_scale;
               }
-              if (adam) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * adam_m_syn1[c + l2] / adam_beta1p / (sqrt(adam_v_syn1[c + l2] / adam_beta2p) + adam_eps); //AdamGrad(adam_m_syn1 + c + l2, adam_v_syn1 + c + l2, g * gs_syn0[c]);
-              else if (binary_one) for (c = 0; c < layer1_size; c++) syn1[c + l2] += alpha * g * gs_syn0[c] / var_scale;
-              else for (c1 = 0; c1 < cate_n; c1++) if (pos[c1] < cate_k) syn1[c1 * cate_k + pos[c1] + l2] += alpha * g / var_scale;
             }
           }
         }
@@ -911,8 +948,16 @@ void *TrainModelThread(void *id) {
         // Learn weights input -> hidden
         if (negative > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += neu1e[c];
         if (hs && pre_train > 0) for (c = 0; c < layer1_size; c++) syn0[c + l1] += alpha * neu1e[c];
-        //if (hs && pre_train > 0) for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) syn0[c1 * cate_k + c2 + l1] += alpha * neu1e[c1 * r_cate_k + c2];
         if (hs && pre_train <= 0) {
+          if (eoe > 1) {
+            // derivative of the eoe
+            if (binary_one) for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < eoe; c2++)
+              syn0eoe[c1 * eoe + c2] += alpha * gs_syn0[c1] * neu1e[c1 * eoe + c2] / var_scale;
+            else for (c1 = 0; c1 < cate_n; c1++) {
+              if (pos[c1] < cate_k) for (c2 = 0; c2 < eoe; c2++)
+                syn0eoe[c1 * cate_k * eoe + pos[c1] * eoe + c2] += alpha * neu1e[c1 * eoe + c2] / var_scale;
+            }
+          }
           // derivative of reconstruction error and KL divergence
           if (posterior && kl) {
             if (hard_sigm) {
@@ -925,9 +970,16 @@ void *TrainModelThread(void *id) {
           } else if (!posterior && ent) {
             if (hard_sigm) HardSigmProb(syn0 + l1, NULL, prob_syn1p);
             else Softmax(syn0 + l1, NULL, prob_syn1p);
-          }
+          }          
+          if (eoe) {
+            for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) {
+              ag1 = 0;
+              for (c3 = 0; c3 < eoe; c3++) ag1 += neu1e[c1 * eoe + c3] * syn0eoe[c1 * cate_k * eoe + c2 * eoe + c3];
+              neu1e_ae[c1 * cate_k + c2] = ag1;
+            }
+          } else for (c = 0; c < layer1_size; c++) neu1e_ae[c] = neu1e[c];
           for (c1 = 0; c1 < cate_n; c1++) {
-            for (c2 = 0; c2 < cate_k; c2++) neu1e[c1 * cate_k + c2] = (binary_one + 1) * neu1e[c1 * cate_k + c2] / tau / var_scale;
+            for (c2 = 0; c2 < cate_k; c2++) neu1e_ae[c1 * cate_k + c2] = (binary_one + 1) * neu1e_ae[c1 * cate_k + c2] / tau / var_scale;
             if (posterior && kl) for (c2 = 0; c2 < r_cate_k; c2++) neu1e_prob[c1 * r_cate_k + c2] = -fast_log(prob_syn1p[c1 * r_cate_k + c2] / prob_syn0[c1 * r_cate_k + c2]) + 1;
             if (!posterior && ent) for (c2 = 0; c2 < r_cate_k; c2++) neu1e_prob[c1 * r_cate_k + c2] = -(fast_log(prob_syn1p[c1 * r_cate_k + c2]) + 1) / vocab[last_word].cn_e;
           }
@@ -935,12 +987,12 @@ void *TrainModelThread(void *id) {
             for (c2 = 0; c2 < cate_k; c2++) {
               ag1 = ag2 = 0;
               if (hard_sigm) {
-                ag1 += neu1e[c1] * HardSigmGrad(prob_syn1p_app[c1]);
+                ag1 += neu1e_ae[c1] * HardSigmGrad(prob_syn1p_app[c1]);
                 if ((posterior && kl) || (!posterior && ent)) ag1 += (neu1e_prob[c1 * r_cate_k] - neu1e_prob[c1 * r_cate_k + 1]) * HardSigmGrad(prob_syn1p[c1 * r_cate_k]);
                 //if (posterior && kl) ag2 += (prob_syn1p[c1 * r_cate_k] / prob_syn0[c1 * r_cate_k] - prob_syn1p[c1 * r_cate_k + 1] / prob_syn0[c1 * r_cate_k + 1]) * HardSigmGrad(prob_syn0[c1 * r_cate_k]);
               } else {
                 for (c3 = 0; c3 < cate_k; c3++) 
-                  ag1 += neu1e[c1 * cate_k + c3] * prob_syn1p_app[c1 * cate_k + c3] * ((c2 == c3 ? 1 : 0) - prob_syn1p_app[c1 * cate_k + c2]);
+                  ag1 += neu1e_ae[c1 * cate_k + c3] * prob_syn1p_app[c1 * cate_k + c3] * ((c2 == c3 ? 1 : 0) - prob_syn1p_app[c1 * cate_k + c2]);
                 if ((posterior && kl) || (!posterior && ent)) for (c3 = 0; c3 < r_cate_k; c3++)
                   ag1 += neu1e_prob[c1 * r_cate_k + c3] * prob_syn1p[c1 * r_cate_k + c3] * ((c2 == c3 ? 1 : 0) - prob_syn1p[c1 * r_cate_k + c2]);
                 if (posterior && kl) for (c3 = 0; c3 < r_cate_k; c3++) 
@@ -970,8 +1022,10 @@ void *TrainModelThread(void *id) {
   fclose(fi);
   free(neu1);
   free(neu1e);
+  free(neu1e_ae);
   free(neu1e_prob);
   free(gs_syn0);
+  free(gs_syn0_eoe);
   free(pos);
   free(prob_syn1p);
   free(prob_syn1p_app);
@@ -1006,6 +1060,7 @@ void TrainModel() {
     //last_word_count_actual += word_count_actual;
     //starting_alpha *= alpha_decay;
   }
+  for (a = 0; a < layer1_size * eoe; a++) printf("%lf,", syn0eoe[a]);
   if (classes == 0) {
     // Save the word vectors
     SaveVec();
@@ -1149,6 +1204,7 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-pre", argc, argv)) > 0) pre_train = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-binary-one", argc, argv)) > 0) binary_one = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-hard-sigm", argc, argv)) > 0) hard_sigm = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-eoe", argc, argv)) > 0) eoe = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
@@ -1170,13 +1226,20 @@ int main(int argc, char **argv) {
   r_cate_k = cate_k;
   if (freedom) cate_k -= 1;
   layer1_size  = cate_n * cate_k;
+  syn1_layer1_size = layer1_size;
+  if (eoe > 0) syn1_layer1_size = cate_n * eoe;
+  if (pre_train > 0 && eoe != cate_k) {
+    printf("use pre train but eoe != cate_k");
+    exit(1);
+  }
   r_layer1_size = layer1_size + cate_n * freedom;
   var_scale = cate_n / 10;
   if (var_scale < 1) var_scale = 1;
-  binary_one = cate_k == 1 && freedom && binary_one;
+  if (eoe > 1) var_scale = 1;
+  binary_one = cate_k == 1 && freedom && binary_one; // only use in binary case
   hard_sigm = cate_k == 1 && freedom && hard_sigm; // only use in binary case
   printf("%lld category variable with %lld value, freedom: %d\n", cate_n, cate_k, freedom);
-  printf("binary one: %d, hard sigm: %d\n", binary_one, hard_sigm);
+  printf("binary one: %d, hard sigm: %d, eoe: %d\n", binary_one, hard_sigm, eoe);
   vocab = (struct vocab_word *)calloc(vocab_max_size, sizeof(struct vocab_word));
   vocab_hash = (int *)calloc(vocab_hash_size, sizeof(int));
   expTable = (real *)malloc((EXP_TABLE_SIZE + 1) * sizeof(real));
