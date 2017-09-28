@@ -9,10 +9,10 @@ VEC_DIR=../vec
 #ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
 #VECTOR_DATA=$DATA_DIR/text8-vector.bin
 
-TEXT_DATA=$DATA_DIR/text8
-#TEXT_DATA=/home/v-zhjia2/exp/data/WestburyLab.wikicorp.201004.txt.clean
+#TEXT_DATA=$DATA_DIR/text8
+TEXT_DATA=/home/v-zhjia2/exp/data/WestburyLab.wikicorp.201004.txt.clean
 ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
-VECTOR=text8_w2v_500_epoch5
+VECTOR=wiki_w2v_500_s5_m10_epoch5
 VECTOR_DATA=$VEC_DIR/${VECTOR}.bin
 PROB_VECTOR_DATA=$VEC_DIR/${VECTOR}.prob.bin
 SIZE=500
@@ -30,12 +30,12 @@ if [ ! -e $TEXT_DATA ]; then
 fi
 echo -----------------------------------------------------------------------------------------------------
 echo -- Training vectors...
-time $BIN_DIR/word2vec -train $TEXT_DATA -output $VECTOR_DATA -cbow 0 -size $SIZE -window 3 -negative 0 -hs 1 -sample 1e-3 \
--threads 12 -binary 1 -report-period 0 -eval ./eval.sh -epoch 5 -alpha 0.025
+time $BIN_DIR/word2vec -train $TEXT_DATA -output $VECTOR_DATA -cbow 0 -size $SIZE -window 5 -negative 0 -hs 1 -sample 1e-5 -min-count 10 \
+-threads 12 -binary 1 -report-period 0 -eval ./eval.sh -epoch 5 -alpha 0.025 
 
 #fi
 
-$BIN_DIR/format $VECTOR_DATA $PROB_VECTOR_DATA $SIZE 2 1
+$BIN_DIR/format $VECTOR_DATA $PROB_VECTOR_DATA $SIZE 2 0 1
 
 echo -----------------------------------------------------------------------------------------------------
 echo -- distance...
