@@ -19,7 +19,7 @@
 
 
 const long long max_size = 2000;         // max length of strings
-const long long N = 50;                  // number of closest words that will be shown
+const long long N = 25;                  // number of closest words that will be shown
 const long long max_w = 50;              // max length of vocabulary entries
 
 int main(int argc, char **argv) {
@@ -33,7 +33,7 @@ int main(int argc, char **argv) {
   float *M, *Mn, *C;
   char *vocab;
   if (argc < 2) {
-    printf("Usage: ./distance <FILE>\nwhere FILE contains word projections in the BINARY FORMAT\n");
+    printf("Usage: ./distance-context <FILE> <CONTEXT_FILE>\nwhere FILE and CONTEXT_FILE contains word projections in the BINARY FORMAT\n");
     return 0;
   }
   strcpy(file_name, argv[1]);
@@ -78,7 +78,6 @@ int main(int argc, char **argv) {
     //for (a = 0; a < size; a++) M[a + b * size] /= len;
   }
   fclose(cf);
-  printf("fassdf");
   while (1) {
     for (a = 0; a < N; a++) bestd[a] = 0;
     for (a = 0; a < N; a++) bestw[a][0] = 0;
@@ -97,6 +96,7 @@ int main(int argc, char **argv) {
     b = 0;
     c = 0;
     while (1) {
+      if (st1[c] == 0) break;
       st[cn][b] = st1[c];
       b++;
       c++;
@@ -109,17 +109,18 @@ int main(int argc, char **argv) {
       }
     }
     cn++;
+    printf("cn:%lld\n", cn);
     for (a = 0; a < cn; a++) {
       for (b = 0; b < words; b++) if (!strcmp(&vocab[b * max_w], st[a])) break;
       if (b == words) b = -1;
       bi[a] = b;
       printf("\nWord: %s  Position in vocabulary: %lld\n", st[a], bi[a]);
-      if (b == -1) {
-        printf("Out of dictionary word!\n");
-        break;
-      }
+      //if (b == -1) {
+      //  printf("Out of dictionary word!\n");
+      //  break;
+      //}
     }
-    if (b == -1) continue;
+    //if (b == -1) continue;
     printf("\n                                              Word       Cosine distance\n------------------------------------------------------------------------\n");
     for (a = 0; a < size; a++) vec[a] = 0;
     for (a = 0; a < size; a++) vec[a] += M[a + bi[0] * size];
@@ -131,6 +132,13 @@ int main(int argc, char **argv) {
     for (a = 0; a < size; a++) len += vec[a] * vec[a];
     len = sqrt(len);
     for (a = 0; a < size; a++) vec[a] /= len;
+    // vis
+    for (a = 0; a < 5; a++) {
+      for (b = 0; b < 5; b++) printf("%7.3f", Mn[a * 5 + b + bi[0] * size]);
+      printf("\n");
+      for (b = 0; b < 5; b++) printf("%7.3f", vec[a * 5 + b]);
+      printf("\n----\n");
+    }
     for (a = 0; a < N; a++) bestd[a] = 0;
     for (a = 0; a < N; a++) bestw[a][0] = 0;
     for (c = 0; c < words; c++) {
