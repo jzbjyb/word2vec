@@ -5,6 +5,7 @@ src/word2phrase
 src/word2vec
 vec
 eval
+data/wiki_context
 data/text8*
 *.out
 .vscode
