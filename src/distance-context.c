@@ -28,11 +28,11 @@ int main(int argc, char **argv) {
   char bestw[N][max_size];
   char file_name[max_size], context_file_name[max_size], st[100][max_size];
   float dist, len, bestd[N], vec[max_size];
-  long long words, size, a, b, c, d, cn, bi[100];
+  long long words, size, a, b, c, d, cn, bi[100], norm = 0;
   char ch;
   float *M, *Mn, *C;
   char *vocab;
-  if (argc < 2) {
+  if (argc < 3) {
     printf("Usage: ./distance-context <FILE> <CONTEXT_FILE>\nwhere FILE and CONTEXT_FILE contains word projections in the BINARY FORMAT\n");
     return 0;
   }
@@ -47,7 +47,9 @@ int main(int argc, char **argv) {
   if (cf == NULL) {
     printf("Input context file not found\n");
     return -1;
-  }
+  }  
+  if (argc > 3) norm = atoi(argv[3]);
+  if (norm) printf("use norm\n");
   fscanf(f, "%lld", &words);
   fscanf(f, "%lld", &size);
   vocab = (char *)malloc((long long)words * max_w * sizeof(char));
@@ -65,6 +67,7 @@ int main(int argc, char **argv) {
     for (a = 0; a < size; a++) len += M[a + b * size] * M[a + b * size];
     len = sqrt(len);
     for (a = 0; a < size; a++) Mn[a + b * size] = M[a + b * size] / len;
+    if (norm) for (a = 0; a < size; a++) M[a + b * size] = Mn[a + b * size];
   }
   fclose(f);
   fscanf(cf, "%lld", &words);
@@ -72,10 +75,12 @@ int main(int argc, char **argv) {
   for (b = 0; b < words; b++) {
     fscanf(cf, "%s%c", &vocab[b * max_w], &ch);
     for (a = 0; a < size; a++) fread(&C[a + b * size], sizeof(float), 1, cf);
-    //len = 0;
-    //for (a = 0; a < size; a++) len += M[a + b * size] * M[a + b * size];
-    //len = sqrt(len);
-    //for (a = 0; a < size; a++) M[a + b * size] /= len;
+    if (norm) {
+      len = 0;
+      for (a = 0; a < size; a++) len += C[a + b * size] * C[a + b * size];
+      len = sqrt(len);
+      for (a = 0; a < size; a++) C[a + b * size] /= len;
+    }
   }
   fclose(cf);
   while (1) {

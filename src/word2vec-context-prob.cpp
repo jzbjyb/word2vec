@@ -49,7 +49,8 @@ int *vocab_hash;
 long long vocab_max_size = 1000, vocab_size = 0, layer1_size = 100, syn1_layer1_size, r_layer1_size;
 long long cate_n = 1, cate_k = 100, r_cate_k;
 long long train_words = 0, word_count_actual = 0, last_word_count_actual = 0, file_size = 0, classes = 0;
-real alpha = 0.025, starting_alpha, alpha_decay = 1.0 / 3.0, sample = 0, tau = 1, min_tau = 0.2, starting_tau, all_prob = 0, var_scale = 1;
+real alpha = 0.025, starting_alpha, alpha_decay = 1.0 / 3.0, sample = 0, down_sample = 0, \
+     tau = 1, min_tau = 0.2, starting_tau, all_prob = 0, var_scale = 1;
 real *syn0, *syn0eoe, *syn1, *syn1p, *syn1neg, *expTable;
 real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *adam_v_syn1p, \
      adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8, \
@@ -704,7 +705,7 @@ real AdamGrad(real *m, real *v, real grad) {
 
 void *TrainModelThread(void *id) {
   long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
-  long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
+  long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1], sen_flag[MAX_SENTENCE_LENGTH + 1];
   long long l1, l11, l2, c, target, label;
   long long c1, c2, c3;
   real ag1, ag2;
@@ -773,13 +774,19 @@ void *TrainModelThread(void *id) {
         if (word == -1) continue;
         word_count++;
         if (word == 0) break;
+        sen_flag[sentence_length] = 1;
         // The subsampling randomly discards frequent words while keeping the ranking same
         if (sample > 0) {
           real ran = (sqrt(vocab[word].cn / (sample * train_words)) + 1) * (sample * train_words) / vocab[word].cn;
           next_random = next_random * (unsigned long long)25214903917 + 11;
           if (ran < (next_random & 0xFFFF) / (real)65536) continue;
+          else if (down_sample > 0) {
+            // sub-sample without effect on context
+            ran = (sqrt(vocab[word].cn / (down_sample * train_words)) + 1) * (down_sample * train_words) / vocab[word].cn;
+            if (ran < (next_random & 0xFFFF) / (real)65536) sen_flag[sentence_length] = 0;
+          }
         }
-        sen[sentence_length] = word;
+        sen[sentence_length] = word;        
         sentence_length++;
         if (sentence_length >= MAX_SENTENCE_LENGTH) break;
       }
@@ -848,7 +855,7 @@ void *TrainModelThread(void *id) {
         if (last_word == -1) continue;
         for (c = 0; c < layer1_size; c++) syn0[c + last_word * layer1_size] += neu1e[c];
       }
-    } else {  //train skip-gram
+    } else if (sen_flag[sentence_position]) {  //train skip-gram
       l1 = word * layer1_size;
       if (pre_train <= 0) {
         if (posterior) {

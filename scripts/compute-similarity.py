@@ -24,6 +24,9 @@ def softmax_prob(logits, cate_n, cate_k):
   probs = np_exp(logits)
   return (probs / np_sum(probs, axis=1, keepdims=True)).reshape(-1)
 
+def KL_distance(prob1, prob2):
+  return np.sum(prob1 * np.log2(prob1 / prob2)) / prob1.shape[0]
+
 def parse_sim_line(line, delimiter='\t', case_insensitive=True, mode=0):
   if mode == 0:
     a, b, sim = line.split(delimiter)
@@ -85,6 +88,8 @@ def evaluate_word_pairs(self, pairs, delimiter='\t', restrict_vocab=300000,
       if mode == 1 and window >= 0 and context_emb != None:
         aemb = np_sum(stack([self[a]] + [context_emb[w] for w in (asen[aind-window:aind] + asen[aind+1:aind+window+1]) 
                                         if w in context_emb and self.vocab[a].index <= restrict_vocab]), axis=0)
+        aemb2 = np_sum(stack([self[a]] + [context_emb[w] for w in (asen[aind-window:aind] + asen[aind+1:aind+window+1]) 
+                                        if w in context_emb and self.vocab[a].index <= restrict_vocab] * 5), axis=0)
         bemb = np_sum(stack([self[b]] + [context_emb[w] for w in (bsen[bind-window:bind] + bsen[bind+1:bind+window+1])
                                         if w in context_emb and self.vocab[b].index <= restrict_vocab]), axis=0)
       else:
@@ -95,12 +100,14 @@ def evaluate_word_pairs(self, pairs, delimiter='\t', restrict_vocab=300000,
       else:
         '''
         post = softmax_prob(aemb, cate_n, cate_k).reshape(cate_n, cate_k)
+        post2 = softmax_prob(aemb2, cate_n, cate_k).reshape(cate_n, cate_k)
         prior = softmax_prob(self[a], cate_n, cate_k).reshape(cate_n, cate_k)
+        print(KL_distance(post, prior), KL_distance(post2, prior))
         print(a, len([context_emb[w] for w in (asen[aind-window:aind] + asen[aind+1:aind+window+1]) if w in context_emb]),
               b, len([context_emb[w] for w in (bsen[bind-window:bind] + bsen[bind+1:bind+window+1]) if w in context_emb]))
         print(asen[aind-window:aind] + asen[aind+1:aind+window+1])
         print(bsen[bind-window:bind] + bsen[bind+1:bind+window+1])
-        print(np.stack([prior, post], axis=1)[:10])
+        print(np.stack([prior, post, post2], axis=1)[:10])
         input()
         '''
         similarity_model.append(dot(matutils.unitvec(aemb), matutils.unitvec(bemb)) if normalized else dot(aemb, bemb))  # Similarity from the model

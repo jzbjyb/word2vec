@@ -1,2 +1,4 @@
 word="[[:blank:]]$1[[:blank:]]"
-grep "$word" ../../data/WestburyLab.wikicorp.201004.txt.clean | shuf -n $2
+file=../../data/WestburyLab.wikicorp.201004.txt.clean
+#file=../data/text8_lines
+grep "$word" "$file" | shuf -n $2

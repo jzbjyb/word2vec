@@ -1,5 +1,7 @@
 #!/bin/bash
 
+NGRAM_HOME=/home/v-zhjia2/exp/ngram2vec
+export PATH=$NGRAM_HOME:$PATH
 DATA_DIR=../data
 BIN_DIR=../bin
 SRC_DIR=../src
@@ -14,4 +16,8 @@ pushd ${SRC_DIR} && make; popd
 
 python compute-similarity.py -vec $VECTOR_DATA -sim $SIM_DATA -nor
 #python compute-similarity.py -vec $VECTOR_DATA -context_vec $CONTEXT_VECTOR_DATA -sim $SIM_DATA -nor
-$BIN_DIR/compute-accuracy $VECTOR_DATA 1 0 < $DATA_DIR/questions-words.txt #> ../eval/$VEC_FILE.analogy
+#$BIN_DIR/compute-accuracy $VECTOR_DATA 1 0 < $DATA_DIR/questions-words.txt #> ../eval/$VEC_FILE.analogy
+if [ ! -e $VEC_DIR/$VEC.words.npy ]; then
+  text2numpy $VEC_DIR/$VEC.words
+fi
+analogy_eval SGNS $VEC_DIR/$VEC ${NGRAM_HOME}/testsets/analogy/google.txt

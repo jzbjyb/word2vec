@@ -12,9 +12,11 @@ VEC_DIR=../vec
 TEXT_DATA=$DATA_DIR/text8
 #TEXT_DATA=/home/v-zhjia2/exp/data/WestburyLab.wikicorp.201004.txt.clean
 ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
-VECTOR=text8_context_size100-5_epoch30_s5_m10
+VECTOR=test3
 PRE_VECTOR_DATA=$VEC_DIR/text8_w2v_100_epoch10.bin
+VOCAB=$VEC_DIR/${VECTOR}.words.vocab
 VECTOR_DATA=$VEC_DIR/${VECTOR}.bin
+VECTOR_DATA2=$VEC_DIR/${VECTOR}.words
 PROB_VECTOR_DATA=$VEC_DIR/${VECTOR}.prob.bin
 PROB_VECTOR_DATA2=$VEC_DIR/${VECTOR}.prob2.bin
 CONTEXT_VECTOR_DATA=$VEC_DIR/${VECTOR}.context.bin
@@ -34,11 +36,12 @@ if [ ! -e $TEXT_DATA ]; then
 fi
 echo -----------------------------------------------------------------------------------------------------
 echo -- Training vectors...
-time $BIN_DIR/word2vec-context-prob -train $TEXT_DATA -output $VECTOR_DATA -context-output $CONTEXT_VECTOR_DATA -predict_output $PREDICT_VECTOR_DATA \
+time $BIN_DIR/word2vec-context-prob -train $TEXT_DATA -output $VECTOR_DATA -context-output $CONTEXT_VECTOR_DATA -predict_output $PREDICT_VECTOR_DATA -save-vocab $VOCAB \
 -cbow 0 -cate-n $CATE_N -cate-k $CATE_K -tau 1 -window 3 -negative 0 -hs 1 -sample 1e-5 -min-count 10 -threads 12 -binary 1 -report-period 0 \
--alpha 0.5 -eval ./eval-prob.sh -epoch 30 -kl 1 -ent 0 -rollback 0 -posterior 1 -freedom $FREEDOM -adam 0 -binary-one 0 \
+-alpha 0.5 -eval ./eval-prob.sh -epoch 10 -kl 1 -ent 0 -rollback 0 -posterior 1 -freedom $FREEDOM -adam 0 -binary-one 0 \
 -pre 0 -pre-vec 11 -hard-sigm 0 -eoe 0
 
+$BIN_DIR/binary-to-text $VECTOR_DATA $VECTOR_DATA2
 $BIN_DIR/format $VECTOR_DATA $PROB_VECTOR_DATA $CATE_N $CATE_K 0 $FREEDOM
 $BIN_DIR/format $PROB_VECTOR_DATA $PROB_VECTOR_DATA2 $CATE_N $CATE_K 1
 

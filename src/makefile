@@ -5,7 +5,7 @@ CC = gcc
 #The -Ofast might not work with older versions of gcc; in that case, use -O2
 CFLAGS = -lm -pthread -O2 -Wall -funroll-loops -Wno-unused-result
 
-all: word2vec word2vec-prob word2vec-context-prob word2phrase distance distance-context word-analogy compute-accuracy format
+all: word2vec word2vec-prob word2vec-context-prob word2phrase distance distance-context word-analogy compute-accuracy format binary-to-text
 
 word2vec : word2vec.cpp
 	$(CC) word2vec.cpp -o ${BIN_DIR}/word2vec $(CFLAGS)
@@ -25,6 +25,8 @@ compute-accuracy : compute-accuracy.c
 	$(CC) compute-accuracy.c -o ${BIN_DIR}/compute-accuracy $(CFLAGS)
 format: format.c
 	$(CC) format.c -o ${BIN_DIR}/format $(CFLAGS)
+binary-to-text: binary-to-text.c
+	$(CC) binary-to-text.c -o ${BIN_DIR}/binary-to-text $(CFLAGS)	
 	chmod +x ${SCRIPTS_DIR}/*.sh
 
 clean:
