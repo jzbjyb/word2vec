@@ -23,15 +23,16 @@ const long long N = 25;                  // number of closest words that will be
 const long long max_w = 50;              // max length of vocabulary entries
 
 int main(int argc, char **argv) {
-  FILE *f, *cf;
+  FILE *f, *cf, *inf;
   char st1[max_size];
   char bestw[N][max_size];
-  char file_name[max_size], context_file_name[max_size], st[100][max_size];
-  float dist, len, bestd[N], vec[max_size];
-  long long words, size, a, b, c, d, cn, bi[100], norm = 0;
+  char file_name[max_size], context_file_name[max_size], interaction_file_name[max_size], st[100][max_size];
+  float dist, len, bestd[N], vec[max_size], context[max_size];
+  long long words, size, cate_n, cate_k, a, b, c, d, cn, bi[100], norm = 0;
   char ch;
-  float *M, *Mn, *C;
+  float *M, *Mn, *C, *inter;
   char *vocab;
+  interaction_file_name[0] = 0;
   if (argc < 3) {
     printf("Usage: ./distance-context <FILE> <CONTEXT_FILE>\nwhere FILE and CONTEXT_FILE contains word projections in the BINARY FORMAT\n");
     return 0;
@@ -47,8 +48,13 @@ int main(int argc, char **argv) {
   if (cf == NULL) {
     printf("Input context file not found\n");
     return -1;
-  }  
+  }
   if (argc > 3) norm = atoi(argv[3]);
+  if (argc > 4) {
+    strcpy(interaction_file_name, argv[4]);
+    cate_n = atoi(argv[5]);
+    cate_k = atoi(argv[6]);
+  }
   if (norm) printf("use norm\n");
   fscanf(f, "%lld", &words);
   fscanf(f, "%lld", &size);
@@ -56,6 +62,19 @@ int main(int argc, char **argv) {
   M = (float *)malloc((long long)words * (long long)size * sizeof(float));
   Mn = (float *)malloc((long long)words * (long long)size * sizeof(float));
   C = (float *)malloc((long long)words * (long long)size * sizeof(float));
+  if (interaction_file_name[0] != 0) {
+    inf = fopen(interaction_file_name, "rb");
+    if (inf == NULL) {
+      printf("Interaction file not found\n");
+      return -1;
+    }
+    inter = (float *)malloc(cate_n * cate_k * cate_k * sizeof(float));
+    for (a = 0; a < cate_n * cate_k; a++) {
+      for (b = 0; b < cate_k; b++) fscanf(inf, "%f ", &inter[a * cate_k + b]);
+      fscanf(inf, "%c", &ch);
+    }
+    fclose(inf);
+  }
   if (M == NULL || Mn == NULL || C == NULL) {
     printf("Cannot allocate memory: %lld MB    %lld  %lld\n", (long long)words * size * sizeof(float) / 1048576, words, size);
     return -1;
@@ -129,7 +148,20 @@ int main(int argc, char **argv) {
     printf("\n                                              Word       Cosine distance\n------------------------------------------------------------------------\n");
     for (a = 0; a < size; a++) vec[a] = 0;
     for (a = 0; a < size; a++) vec[a] += M[a + bi[0] * size];
-    for (b = 1; b < cn; b++) {
+    if (interaction_file_name[0] != 0) {
+      for (a = 0; a < size; a++) context[a] = 0;
+      for (b = 1; b < cn; b++) {
+        if (bi[b] == -1) continue;
+        for (a = 0; a < size; a++) context[a] += C[a + bi[b] * size];
+      }
+      d = 0;
+      for (a = 0; a < cate_n; a++) for (b = 0; b < cate_k; b++) for (c = 0; c < cate_k; c++) {
+        printf("%lf, ", inter[a * cate_k * cate_k + b * cate_k + c]);
+        d += context[a * cate_k + b] * M[a * cate_k + c + bi[0] * size] * inter[a * cate_k * cate_k + b * cate_k + c];
+      }
+      for (a = 0; a < size; a++) vec[a] += context[a] * d;
+      printf("\ninteraction: %lf\n", d);
+    } else for (b = 1; b < cn; b++) {
       if (bi[b] == -1) continue;
       for (a = 0; a < size; a++) vec[a] += C[a + bi[b] * size];
     }

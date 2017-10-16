@@ -40,7 +40,8 @@ struct vocab_word {
   char *word, *code, codelen;
 };
 
-char train_file[MAX_STRING], output_file[MAX_STRING], context_output_file[MAX_STRING], predict_output_file[MAX_STRING], eval_sh[MAX_STRING];
+char train_file[MAX_STRING], output_file[MAX_STRING], context_output_file[MAX_STRING], context_gate_output_file[MAX_STRING], context_interaction_gate_output_file[MAX_STRING], \
+     predict_output_file[MAX_STRING], eval_sh[MAX_STRING];
 char pre_train_file[MAX_STRING];
 char save_vocab_file[MAX_STRING], read_vocab_file[MAX_STRING];
 struct vocab_word *vocab;
@@ -51,7 +52,7 @@ long long cate_n = 1, cate_k = 100, r_cate_k;
 long long train_words = 0, word_count_actual = 0, last_word_count_actual = 0, file_size = 0, classes = 0;
 real alpha = 0.025, starting_alpha, alpha_decay = 1.0 / 3.0, sample = 0, down_sample = 0, \
      tau = 1, min_tau = 0.2, starting_tau, all_prob = 0, var_scale = 1;
-real *syn0, *syn0eoe, *syn1, *syn1p, *syn1neg, *expTable;
+real *syn0, *syn0gate, *interaction, *syn0eoe, *syn1, *syn1p, *syn1neg, *expTable;
 real *adam_m_syn0, *adam_v_syn0, *adam_m_syn1, *adam_v_syn1, *adam_m_syn1p, *adam_v_syn1p, \
      adam_beta1 = 0.9, adam_beta1p = 0.1, adam_beta2 = 0.999, adam_beta2p = 0.001, adam_eps = 1e-8, \
      *all_grad;
@@ -59,7 +60,7 @@ clock_t start;
 
 int hs = 1, negative = 0;
 int report_period = 10, num_epoch = 1, kl = 0, ent = 0, rollback = 0, posterior = 0, freedom = 0, adam = 0, pre_train = 0, 
-    binary_one = 0, hard_sigm = 0, eoe = 0;
+    binary_one = 0, hard_sigm = 0, eoe = 0, context_gate = 0, context_interaction_gate = 0;
 const int table_size = 1e8;
 int *table;
 
@@ -438,6 +439,37 @@ void SaveVec() {
     fprintf(fo, "\n");
   }
   fclose(fo);
+  // save context gate
+  if (context_gate && context_gate_output_file[0] != 0) {
+    fo = fopen(context_gate_output_file, "wb");
+    if (fo == NULL) {
+      fprintf(stderr, "Cannot open %s: permission denied\n", context_gate_output_file);
+      exit(1);
+    }
+    fprintf(fo, "%lld %lld\n", vocab_size, 1);
+    for (a = 0; a < vocab_size; a++) {
+      if (vocab[a].word != NULL) {
+        fprintf(fo, "%s ", vocab[a].word);
+      }
+      if (binary) for (b = 0; b < 1; b++) fwrite(&syn0gate[a * 1 + b], sizeof(real), 1, fo);
+      else for (b = 0; b < 1; b++) fprintf(fo, "%lf ", syn0gate[a * 1 + b]);
+      fprintf(fo, "\n");
+    }
+    fclose(fo);
+  }
+  // save context interaction gate
+  if (context_interaction_gate && context_interaction_gate_output_file[0] != 0) {
+    fo = fopen(context_interaction_gate_output_file, "wb");
+    if (fo == NULL) {
+      fprintf(stderr, "Cannot open %s: permission denied\n", context_interaction_gate_output_file);
+      exit(1);
+    }
+    for (a = 0; a < cate_n * cate_k; a++) {
+      for (b = 0; b < cate_k; b++) fprintf(fo, "%lf ", interaction[a * cate_k + b]);
+      fprintf(fo, "\n");
+    }
+    fclose(fo);
+  }
   // save predict (output) embedding
   // TODO: hierarchy softmax is hard to store
   if (predict_output_file[0] != 0) {
@@ -505,8 +537,8 @@ void InitNet() {
     a = posix_memalign((void **)&syn1p, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (syn1p == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
-      syn1p[a * layer1_size + b] = 0;
-      //syn1p[a * layer1_size + b] = (rand() / (real)RAND_MAX - 0.5) / layer1_size;
+      //syn1p[a * layer1_size + b] = 0;
+      syn1p[a * layer1_size + b] = (rand() / (real)RAND_MAX - 0.5) / layer1_size;
     a = posix_memalign((void **)&all_grad, 128, (long long)vocab_size * layer1_size * sizeof(real));
     if (all_grad == NULL) {printf("Memory allocation failed\n"); exit(1);}
     for (b = 0; b < layer1_size; b++) for (a = 0; a < vocab_size; a++)
@@ -541,6 +573,17 @@ void InitNet() {
       //  if (b == c) syn0eoe[a * cate_k * eoe + b * eoe + c] = 1;
       //  else syn0eoe[a * cate_k * eoe + b * eoe + c] = 0;
       //}
+    }
+    if (context_gate) {
+      a = posix_memalign((void **)&syn0gate, 128, (long long)vocab_size * 1 * sizeof(real));
+      if (syn0gate == NULL) {printf("Memory allocation failed\n"); exit(1);}
+      for (a = 0; a < vocab_size; a++) syn0gate[a] = 1; // open the gate initially
+    }
+    if (context_interaction_gate) {
+      a = posix_memalign((void **)&interaction, 128, (long long)cate_n * cate_k * cate_k * sizeof(real));
+      if (interaction == NULL) {printf("Memory allocation failed\n"); exit(1);}
+      for (b = 0; b < cate_k; b++) for (a = 0; a < layer1_size; a++)
+        interaction[a * cate_k + b] = (rand() / (real)RAND_MAX - 0.5) / (cate_n * cate_k * cate_k);
     }
   }
   if (negative>0) {
@@ -594,6 +637,8 @@ void DestroyNet() {
   if (adam_m_syn1p != NULL) free(adam_m_syn1p);
   if (adam_v_syn1p != NULL) free(adam_v_syn1p);
   if (syn0eoe != NULL) free(syn0eoe);
+  if (syn0gate != NULL) free(syn0gate);
+  if (interaction != NULL) free(interaction);
 }
 
 real Clip(real x) {
@@ -708,16 +753,19 @@ void *TrainModelThread(void *id) {
   long long word_count = 0, last_word_count = 0, last_report_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1], sen_flag[MAX_SENTENCE_LENGTH + 1];
   long long l1, l11, l2, c, target, label;
   long long c1, c2, c3;
-  real ag1, ag2;
+  real ag1, ag2, ag3;
   unsigned long long next_random = (long long)id;
   unsigned int rr = *((int*)(&id));
-  real f, g, this_prob = 0;
+  real f, g, this_prob = 0, gate;
   clock_t now;
   real *neu1 = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e = (real *)calloc(syn1_layer1_size, sizeof(real));
   real *neu1e_ae = (real *)calloc(layer1_size, sizeof(real));
   real *neu1e_prob = (real *)calloc(r_layer1_size, sizeof(real));
   real *syn1p_context = (real *)calloc(layer1_size, sizeof(real));
+  real *syn0_interaction_grad = (real *)calloc(layer1_size, sizeof(real));
+  real *syn1p_interaction_grad = (real *)calloc(layer1_size, sizeof(real));
+  real *syn1p_context_grad = (real *) calloc(layer1_size, sizeof(real));
   real *gs_syn0 = (real *)calloc(layer1_size, sizeof(real));
   real *gs_syn0_eoe = (real *)calloc(syn1_layer1_size, sizeof(real));
   long long *pos = (long long *)calloc(cate_n, sizeof(long long));
@@ -869,6 +917,19 @@ void *TrainModelThread(void *id) {
             l11 = last_word * layer1_size;
             for (c = 0; c < layer1_size; c++) syn1p_context[c] += syn1p[c + l11];
           }
+          if (context_gate || context_interaction_gate) for (c = 0; c < layer1_size; c++) syn1p_context_grad[c] = syn1p_context[c];
+          if (context_gate) for (c = 0; c < layer1_size; c++) syn1p_context[c] *= syn0gate[word];
+          else if (context_interaction_gate) {
+            for (c = 0; c < layer1_size; c++) syn0_interaction_grad[c] = 0;
+            for (c = 0; c < layer1_size; c++) syn1p_interaction_grad[c] = 0;
+            gate = 0;
+            for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) for (c3 = 0; c3 < cate_k; c3++) {
+              gate += syn1p_context[c1 * cate_k + c2] * syn0[l1 + c1 * cate_k + c3] * interaction[c1 * cate_k * cate_k + c2 * cate_k + c3];
+              syn1p_interaction_grad[c1 * cate_k + c2] += syn0[l1 + c1 * cate_k + c3] * interaction[c1 * cate_k * cate_k + c2 * cate_k + c3];
+              syn0_interaction_grad[c1 * cate_k + c3] += syn1p_context[c1 * cate_k + c2] * interaction[c1 * cate_k * cate_k + c2 * cate_k + c3];
+            }
+            for (c = 0; c < layer1_size; c++) syn1p_context[c] *= gate;
+          }
           if (hard_sigm) HardSigmSample(syn0 + l1, syn1p_context, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
           else GumbelSoftmax(syn0 + l1, syn1p_context, &next_random, &rr, prob_syn1p_app, gs_syn0, pos);
         } else {
@@ -999,6 +1060,7 @@ void *TrainModelThread(void *id) {
           if (posterior && kl) for (c2 = 0; c2 < r_cate_k; c2++) neu1e_prob[c1 * r_cate_k + c2] = -fast_log(prob_syn1p[c1 * r_cate_k + c2] / prob_syn0[c1 * r_cate_k + c2]) + 1;
           if (!posterior && ent) for (c2 = 0; c2 < r_cate_k; c2++) neu1e_prob[c1 * r_cate_k + c2] = -(fast_log(prob_syn1p[c1 * r_cate_k + c2]) + 1) / vocab[last_word].cn_e;
         }
+        ag3 = 0;
         for (c1 = 0; c1 < cate_n; c1++)
           for (c2 = 0; c2 < cate_k; c2++) {
             ag1 = ag2 = 0;
@@ -1026,12 +1088,40 @@ void *TrainModelThread(void *id) {
                 if (c < 0) continue;
                 if (c >= sentence_length) continue;
                 last_word = sen[c];
-                l11 = last_word * layer1_size; 
-                if (adam) syn1p[l11 + c1 * cate_k + c2] += AdamGrad(adam_m_syn1p + l1 + c1 * cate_k + c2, adam_v_syn1p + l1 + c1 * cate_k + c2, ag1);
-                else syn1p[l11 + c1 * cate_k + c2] += alpha * ag1;
+                l11 = last_word * layer1_size;
+                if (context_gate) {
+                  if (adam) syn1p[l11 + c1 * cate_k + c2] += syn0gate[word] * AdamGrad(adam_m_syn1p + l1 + c1 * cate_k + c2, adam_v_syn1p + l1 + c1 * cate_k + c2, ag1);
+                  else syn1p[l11 + c1 * cate_k + c2] += syn0gate[word] * alpha * ag1;
+                } else if (context_interaction_gate) {
+                  if (adam) syn1p[l11 + c1 * cate_k + c2] += gate * AdamGrad(adam_m_syn1p + l1 + c1 * cate_k + c2, adam_v_syn1p + l1 + c1 * cate_k + c2, ag1);
+                  else syn1p[l11 + c1 * cate_k + c2] += gate * alpha * ag1;
+                } else {
+                  if (adam) syn1p[l11 + c1 * cate_k + c2] += AdamGrad(adam_m_syn1p + l1 + c1 * cate_k + c2, adam_v_syn1p + l1 + c1 * cate_k + c2, ag1);
+                  else syn1p[l11 + c1 * cate_k + c2] += alpha * ag1;
+                }
               }
+              if (context_gate) ag3 += ag1 * syn1p_context_grad[c1 * cate_k + c2];
+              else if (context_interaction_gate) ag3 += ag1 * syn1p_context_grad[c1 * cate_k + c2];
             }
           }
+        if (context_gate) syn0gate[word] += alpha * ag3;
+        else if (context_interaction_gate) {
+          for (c1 = 0; c1 < cate_n; c1++) for (c2 = 0; c2 < cate_k; c2++) for (c3 = 0; c3 < cate_k; c3++) {
+            //printf("%lf\n", alpha * syn1p_context_grad[c1 * cate_k + c2] * syn0[l1 + c1 * cate_k + c3]);
+            interaction[c1 * cate_k * cate_k + c2 * cate_k + c3] += alpha * syn1p_context_grad[c1 * cate_k + c2] * syn0[l1 + c1 * cate_k + c3];
+          }
+          for (c = 0; c < layer1_size; c++) syn0[l1 + c] += alpha * ag3 * syn0_interaction_grad[c];
+          if (posterior) {
+            for (a = b; a < window * 2 + 1 - b; a++) if (a != window) {
+              c = sentence_position - window + a;
+              if (c < 0) continue;
+              if (c >= sentence_length) continue;
+              last_word = sen[c];
+              l11 = last_word * layer1_size;
+              for (c = 0; c < layer1_size; c++) syn1p[l11 + c] += alpha * ag3 * syn1p_interaction_grad[c];
+            }
+          }
+        }
       }
     }
     sentence_position++;
@@ -1047,6 +1137,9 @@ void *TrainModelThread(void *id) {
   free(neu1e_ae);
   free(neu1e_prob);
   free(syn1p_context);
+  free(syn0_interaction_grad);
+  free(syn1p_interaction_grad);
+  free(syn1p_context_grad);
   free(gs_syn0);
   free(gs_syn0_eoe);
   free(pos);
@@ -1208,6 +1301,8 @@ int main(int argc, char **argv) {
   pre_train_file[0] = 0;
   output_file[0] = 0;
   context_output_file[0] = 0;
+  context_gate_output_file[0] = 0;
+  context_interaction_gate_output_file[0] = 0;
   predict_output_file[0] = 0;
   save_vocab_file[0] = 0;
   read_vocab_file[0] = 0;
@@ -1228,6 +1323,8 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-binary-one", argc, argv)) > 0) binary_one = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-hard-sigm", argc, argv)) > 0) hard_sigm = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-eoe", argc, argv)) > 0) eoe = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-context-gate", argc, argv)) > 0) context_gate = atoi(argv[i + 1]);
+  if ((i = ArgPos((char *)"-context-interaction-gate", argc, argv)) > 0) context_interaction_gate = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-train", argc, argv)) > 0) strcpy(train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-save-vocab", argc, argv)) > 0) strcpy(save_vocab_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-read-vocab", argc, argv)) > 0) strcpy(read_vocab_file, argv[i + 1]);
@@ -1238,6 +1335,8 @@ int main(int argc, char **argv) {
   if ((i = ArgPos((char *)"-pre-vec", argc, argv)) > 0) strcpy(pre_train_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-output", argc, argv)) > 0) strcpy(output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-context-output", argc, argv)) > 0) strcpy(context_output_file, argv[i + 1]);
+  if ((i = ArgPos((char *)"-context-gate-output", argc, argv)) > 0) strcpy(context_gate_output_file, argv[i + 1]);
+  if ((i = ArgPos((char *)"-context-interaction-gate-output", argc, argv)) > 0) strcpy(context_interaction_gate_output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-predict_output", argc, argv)) > 0) strcpy(predict_output_file, argv[i + 1]);
   if ((i = ArgPos((char *)"-window", argc, argv)) > 0) window = atoi(argv[i + 1]);
   if ((i = ArgPos((char *)"-sample", argc, argv)) > 0) sample = atof(argv[i + 1]);
