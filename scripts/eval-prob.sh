@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NGRAM_HOME=/home/v-zhjia2/exp/ngram2vec
+NGRAM_HOME=../../ngram2vec
 export PATH=$NGRAM_HOME:$PATH
 DATA_DIR=../data
 BIN_DIR=../bin
@@ -11,7 +11,8 @@ VEC_DIR=../vec
 #VEC=text8_size100-5_epoch30_posterior_lr05_s5_m10
 #VEC=text8_context_size100-5_epoch10_s5_m10
 #VEC=wiki_context_size100-5_epoch50_ds8_s5_m10_lr25
-VEC=wiki_context_interaction_size100-5_epoch1_s5_m10
+#VEC=wiki_context_interaction_size100-5_epoch1_s5_m10
+VEC=test
 VEC_FILE=$VEC.bin
 VECTOR_DATA=$VEC_DIR/$VEC_FILE
 #VECTOR_DATA=/home/v-zhjia2/exp/multi-sense-baseline/multi-sense-skipgram/vectors-MSSG-wiki.gz

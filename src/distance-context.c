@@ -27,7 +27,7 @@ int main(int argc, char **argv) {
   char st1[max_size];
   char bestw[N][max_size];
   char file_name[max_size], context_file_name[max_size], interaction_file_name[max_size], st[100][max_size];
-  float dist, len, bestd[N], vec[max_size], context[max_size];
+  float dist, len, gate, bestd[N], vec[max_size], context[max_size];
   long long words, size, cate_n, cate_k, a, b, c, d, cn, bi[100], norm = 0;
   char ch;
   float *M, *Mn, *C, *inter;
@@ -154,13 +154,14 @@ int main(int argc, char **argv) {
         if (bi[b] == -1) continue;
         for (a = 0; a < size; a++) context[a] += C[a + bi[b] * size];
       }
-      d = 0;
+      gate = 0;
+      printf("\ninteraction: %lf\n", gate);
       for (a = 0; a < cate_n; a++) for (b = 0; b < cate_k; b++) for (c = 0; c < cate_k; c++) {
         printf("%lf, ", inter[a * cate_k * cate_k + b * cate_k + c]);
-        d += context[a * cate_k + b] * M[a * cate_k + c + bi[0] * size] * inter[a * cate_k * cate_k + b * cate_k + c];
+        gate += context[a * cate_k + b] * M[a * cate_k + c + bi[0] * size] * inter[a * cate_k * cate_k + b * cate_k + c];
       }
-      for (a = 0; a < size; a++) vec[a] += context[a] * d;
-      printf("\ninteraction: %lf\n", d);
+      for (a = 0; a < size; a++) vec[a] += context[a] * gate;
+      printf("\ninteraction: %lf\n", gate);
     } else for (b = 1; b < cn; b++) {
       if (bi[b] == -1) continue;
       for (a = 0; a < size; a++) vec[a] += C[a + bi[b] * size];

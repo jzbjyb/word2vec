@@ -1,6 +1,6 @@
 #!/bin/bash
 
-NGRAM_HOME=/home/v-zhjia2/exp/ngram2vec
+NGRAM_HOME=../../ngram2vec
 export PATH=$NGRAM_HOME:$PATH
 DATA_DIR=../data
 BIN_DIR=../bin

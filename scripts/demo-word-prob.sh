@@ -10,7 +10,7 @@ VEC_DIR=../vec
 #VECTOR_DATA=$DATA_DIR/text8-vector.bin
 
 #TEXT_DATA=$DATA_DIR/text8
-TEXT_DATA=/home/v-zhjia2/exp/data/WestburyLab.wikicorp.201004.txt.clean
+TEXT_DATA=../../data/WestburyLab.wikicorp.201004.txt.clean
 ZIPPED_TEXT_DATA="${TEXT_DATA}.zip"
 VECTOR=wiki_context_interaction_size100-5_epoch5_s5_m10
 VOCAB=$VEC_DIR/${VECTOR}.words.vocab
