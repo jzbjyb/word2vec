@@ -22,6 +22,7 @@ PROB_VECTOR_DATA2=$VEC_DIR/${VECTOR}.prob2.bin
 CONTEXT_VECTOR_DATA=$VEC_DIR/${VECTOR}.context.bin
 CONTEXT_GATE_VECTOR_DATA=$VEC_DIR/${VECTOR}.gate.bin
 CONTEXT_INTERACTION_GATE_VECTOR_DATA=$VEC_DIR/${VECTOR}.interaction
+MF_MATRIX_VECTOR_DATA=$VEC_DIR/${VECTOR}_mf_matrix.interaction.bin
 PREDICT_VECTOR_DATA=$VEC_DIR/${VECTOR}.predict.bin
 CATE_N=100
 CATE_K=5
@@ -39,10 +40,11 @@ fi
 echo -----------------------------------------------------------------------------------------------------
 echo -- Training vectors...
 time $BIN_DIR/word2vec-context-prob -train $TEXT_DATA -output $VECTOR_DATA -context-output $CONTEXT_VECTOR_DATA \
--context-gate-output $CONTEXT_GATE_VECTOR_DATA -context-interaction-gate-output $CONTEXT_INTERACTION_GATE_VECTOR_DATA -predict_output $PREDICT_VECTOR_DATA -save-vocab $VOCAB \
+-context-gate-output $CONTEXT_GATE_VECTOR_DATA -context-interaction-gate-output $CONTEXT_INTERACTION_GATE_VECTOR_DATA \
+-mf-matrix-output $MF_MATRIX_VECTOR_DATA -predict_output $PREDICT_VECTOR_DATA -save-vocab $VOCAB \
 -cbow 0 -cate-n $CATE_N -cate-k $CATE_K -tau 1 -window 3 -negative 0 -hs 1 -sample 1e-5 -min-count 10 -threads 12 -binary 1 -report-period 0 \
--alpha 0.05 -eval ./eval-prob.sh -epoch 1 -kl 1 -ent 0 -rollback 0 -posterior 1 -freedom $FREEDOM -adam 0 -binary-one 0 \
--pre 0 -pre-vec 11 -hard-sigm 0 -eoe 0 -context-gate 0 -context-interaction-gate 1
+-alpha 0.5 -eval ./eval-prob.sh -epoch 20 -kl 1 -ent 0 -rollback 0 -posterior 1 -freedom $FREEDOM -adam 0 -binary-one 0 \
+-pre 0 -pre-vec 11 -hard-sigm 0 -eoe 0 -context-gate 0 -context-interaction-gate 0 -interaction-mf 2
 
 $BIN_DIR/binary-to-text $VECTOR_DATA $VECTOR_DATA2
 $BIN_DIR/format $VECTOR_DATA $PROB_VECTOR_DATA $CATE_N $CATE_K 0 $FREEDOM

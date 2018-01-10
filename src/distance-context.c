@@ -26,13 +26,14 @@ int main(int argc, char **argv) {
   FILE *f, *cf, *inf;
   char st1[max_size];
   char bestw[N][max_size];
-  char file_name[max_size], context_file_name[max_size], interaction_file_name[max_size], st[100][max_size];
+  char file_name[max_size], context_file_name[max_size], interaction_file_name[max_size], interaction_mf_file_name[max_size], st[100][max_size];
   float dist, len, gate, bestd[N], vec[max_size], context[max_size];
-  long long words, size, cate_n, cate_k, a, b, c, d, cn, bi[100], norm = 0;
+  long long words, size, cate_n, cate_k, a, b, c, d, cn, bi[100], norm = 0, mf_gate_cate_k = 0, interaction_mf_size = 0;
   char ch;
-  float *M, *Mn, *C, *inter;
+  float *M, *Mn, *C, *inter, *mf_matrix;
   char *vocab;
   interaction_file_name[0] = 0;
+
   if (argc < 3) {
     printf("Usage: ./distance-context <FILE> <CONTEXT_FILE>\nwhere FILE and CONTEXT_FILE contains word projections in the BINARY FORMAT\n");
     return 0;
@@ -55,6 +56,12 @@ int main(int argc, char **argv) {
     cate_n = atoi(argv[5]);
     cate_k = atoi(argv[6]);
   }
+  interaction_file_name[0] = 0;
+  if (argc > 7) {
+    mf_gate_cate_k = atoi(argv[7]);
+    interaction_mf_size = atoi(argv[8]);
+    strcpy(interaction_mf_file_name, argv[9]);
+  }
   if (norm) printf("use norm\n");
   fscanf(f, "%lld", &words);
   fscanf(f, "%lld", &size);
@@ -72,6 +79,23 @@ int main(int argc, char **argv) {
     for (a = 0; a < cate_n * cate_k; a++) {
       for (b = 0; b < cate_k; b++) fscanf(inf, "%f ", &inter[a * cate_k + b]);
       fscanf(inf, "%c", &ch);
+    }
+    fclose(inf);
+  }
+  if (interaction_mf_file_name[0] != 0) {
+    inf = fopen(interaction_mf_file_name, "rb");
+    fscanf(inf, "%lld", &words);
+    fscanf(inf, "%lld", &mf_gate_cate_k);
+    mf_matrix = (float *)malloc(words * mf_gate_cate_k * sizeof(float));
+    for (b = 0; b < words; b++) {
+      fscanf(inf, "%s%c", &vocab[b * max_w], &ch);
+      for (a = 0; a < mf_gate_cate_k; a++) fread(&mf_matrix[a + b * mf_gate_cate_k], sizeof(float), 1, inf);
+      if (norm) {
+        len = 0;
+        for (a = 0; a < mf_gate_cate_k; a++) len += mf_matrix[a + b * mf_gate_cate_k] * mf_matrix[a + b * mf_gate_cate_k];
+        len = sqrt(len);
+        for (a = 0; a < mf_gate_cate_k; a++) mf_matrix[a + b * mf_gate_cate_k] /= len;
+      }
     }
     fclose(inf);
   }
@@ -150,18 +174,44 @@ int main(int argc, char **argv) {
     for (a = 0; a < size; a++) vec[a] += M[a + bi[0] * size];
     if (interaction_file_name[0] != 0) {
       for (a = 0; a < size; a++) context[a] = 0;
+      if (mf_gate_cate_k) {
+        for (b = 1; b < cn; b++) {
+          if (bi[b] == -1) continue;
+          gate = 0;
+          for (a = 0; a < mf_gate_cate_k; a++) gate += M[a + bi[0] * size] * C[a + bi[b] * size];
+          for (a = 0; a < size; a++) context[a] += gate * C[a + bi[b] * size];
+          printf("\ninteraction: %lf\n", gate);
+        }
+        for (a = 0; a < size; a++) vec[a] += context[a];
+      } else {
+        for (b = 1; b < cn; b++) {
+          if (bi[b] == -1) continue;
+          for (a = 0; a < size; a++) context[a] += C[a + bi[b] * size];
+        }
+        gate = 0;
+        printf("\ninteraction: %lf\n", gate);
+        for (a = 0; a < cate_n; a++) for (b = 0; b < cate_k; b++) for (c = 0; c < cate_k; c++) {
+          printf("%lf, ", inter[a * cate_k * cate_k + b * cate_k + c]);
+          gate += context[a * cate_k + b] * M[a * cate_k + c + bi[0] * size] * inter[a * cate_k * cate_k + b * cate_k + c];
+        }
+        for (a = 0; a < size; a++) vec[a] += context[a] * gate;
+        printf("\ninteraction: %lf\n", gate);
+      }
+    } else if (interaction_mf_file_name[0] != 0) {
+      for (a = 0; a < size; a++) context[a] = 0;
       for (b = 1; b < cn; b++) {
         if (bi[b] == -1) continue;
-        for (a = 0; a < size; a++) context[a] += C[a + bi[b] * size];
+        gate = 0;
+        if (bi[b] <= interaction_mf_size && bi[0] <= interaction_mf_size) {
+          gate = 0;
+          for (a = 0; a < mf_gate_cate_k; a++) gate += mf_matrix[a + bi[0] * mf_gate_cate_k] * mf_matrix[a + bi[b] * mf_gate_cate_k];
+          gate = 1 / (1 + exp(-gate));
+          printf("\ninteraction: %lf\n", gate);
+        }
+        
+        for (a = 0; a < size; a++) context[a] += gate * C[a + bi[b] * size];
       }
-      gate = 0;
-      printf("\ninteraction: %lf\n", gate);
-      for (a = 0; a < cate_n; a++) for (b = 0; b < cate_k; b++) for (c = 0; c < cate_k; c++) {
-        printf("%lf, ", inter[a * cate_k * cate_k + b * cate_k + c]);
-        gate += context[a * cate_k + b] * M[a * cate_k + c + bi[0] * size] * inter[a * cate_k * cate_k + b * cate_k + c];
-      }
-      for (a = 0; a < size; a++) vec[a] += context[a] * gate;
-      printf("\ninteraction: %lf\n", gate);
+      for (a = 0; a < size; a++) vec[a] += context[a];
     } else for (b = 1; b < cn; b++) {
       if (bi[b] == -1) continue;
       for (a = 0; a < size; a++) vec[a] += C[a + bi[b] * size];
@@ -202,5 +252,7 @@ int main(int argc, char **argv) {
   free(M);
   free(Mn);
   free(C);
+  if (inter != NULL) free(inter);
+  if (mf_matrix != NULL) free(inter);
   return 0;
 }
